@@ -13,12 +13,40 @@ class AgentPhase(str, Enum):
     ESCALATE = "ESCALATE"
 
 
+class SearchResult(BaseModel):
+    issue_id: str
+    title: str
+    description: str
+    category: str
+    severity: str
+    symptoms: Optional[Dict[str, Any]] = None
+    diagnostic_questions: Optional[List[str]] = None
+    tools: Optional[List[str]] = None
+    similarity_score: float
+    confidence_score: float
+    created_at: datetime
+    updated_at: datetime
+
+
 class ClassificationResult(BaseModel):
+    classified: bool = False
+    confidence: float = 0.0
+    suggested_category: str = "Unknown"
+    suggested_severity: str = "Medium"
+    matched_issue_id: Optional[str] = None
+    matched_title: Optional[str] = None
+    matched_description: Optional[str] = None
+    similarity_score: float = 0.0
+    diagnostic_questions: List[str] = Field(default_factory=list)
+    potential_causes: List[Dict[str, Any]] = Field(default_factory=list)
+    recommended_tools: List[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.now)
+    
+    # Legacy fields for backward compatibility
     matched_issue: Optional[Dict[str, Any]] = None
     extracted_entities: Dict[str, Any] = Field(default_factory=dict)
-    confidence: float = 0.0
     reasoning: Optional[str] = None
-    has_diagnostic_question: bool = False
+    has_diagnostic_question: bool = Field(default=False)
 
 
 class RequiredInfoResult(BaseModel):
