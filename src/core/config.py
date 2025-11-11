@@ -19,11 +19,28 @@ class Settings(BaseSettings):
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     
     # LLM Configuration
-    llm_provider: str = "anthropic"
+    llm_provider: str = "openai"  # Default provider
+    llm_fallback_provider: str = "anthropic"
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    
+    # Model Configuration
+    openai_model: str = "gpt-3.5-turbo"
+    anthropic_model: str = "claude-3-haiku-20240307"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
+    
+    # LLM Settings
+    llm_temperature: float = 0.7
+    llm_max_tokens: int = 1000
+    llm_timeout_seconds: int = 60
+    llm_retry_attempts: int = 3
+    llm_retry_delay: float = 1.0
+    
+    # Embedding Settings
+    embedding_cache_ttl: int = 3600  # 1 hour
+    embedding_batch_size: int = 5
+    embedding_similarity_threshold: float = 0.7
     
     # Security
     jwt_secret: str = os.getenv("JWT_SECRET", "your_super_secret_jwt_key_minimum_32_characters")
