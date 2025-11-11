@@ -1,0 +1,691 @@
+import asyncio
+from typing import Dict, Any, Optional, List
+from datetime import datetime
+import logging
+from enum import Enum
+
+from src.agents.base import BaseAgent
+from src.models.session import (
+    SessionState, AgentPhase, ClassificationResult, RequiredInfoResult,
+    ValidationResult, FixResult, TimelineEvent
+)
+from src.core.state_manager import SessionManager
+from src.core.coordination import (
+    CoordinationManager, CoordinationEvent, CoordinationRule
+)
+
+
+class OrchestratorState(Enum):
+    """Orchestrator internal states for coordination flow."""
+    INITIALIZING = "initializing"
+    PROCESSING = "processing"
+    WAITING_FOR_USER = "waiting_for_user"
+    HANDLING_ERROR = "handling_error"
+    COMPLETING = "completing"
+    ESCALATING = "escalating"
+
+
+class OrchestratorAgent(BaseAgent):
+    """
+    Orchestrator agent responsible for coordinating the entire multi-agent workflow.
+    
+    Implements the state machine defined in the architecture document:
+    CLASSIFY → REQUIRED_INFO → VALIDATE → FIX → COMPLETE/ESCALATE
+    """
+    
+    def __init__(self):
+        super().__init__("Orchestrator")
+        self.logger = logging.getLogger(__name__)
+        
+        # Agent registry - will be populated with actual agent instances
+        self.agents: Dict[str, BaseAgent] = {}
+        
+        # Coordination manager (will be set via dependencies)
+        self.coordination_manager: Optional[CoordinationManager] = None
+        
+        # State transition rules
+        self.state_transitions = {
+            AgentPhase.CLASSIFY: {
+                "success": self._determine_next_after_classification,
+                "failure": self._handle_classification_failure,
+                "retry": self._retry_classification
+            },
+            AgentPhase.REQUIRED_INFO: {
+                "success": AgentPhase.VALIDATE,
+                "failure": self._handle_info_failure,
+                "retry": AgentPhase.REQUIRED_INFO
+            },
+            AgentPhase.VALIDATE: {
+                "success": self._determine_next_after_validation,
+                "failure": self._handle_validation_failure,
+                "retry": AgentPhase.VALIDATE
+            },
+            AgentPhase.FIX: {
+                "success": AgentPhase.COMPLETE,
+                "failure": self._handle_fix_failure,
+                "retry": AgentPhase.FIX
+            }
+        }
+        
+        # Maximum retry counts per phase
+        self.max_retries = {
+            AgentPhase.CLASSIFY: 3,
+            AgentPhase.REQUIRED_INFO: 2,
+            AgentPhase.VALIDATE: 3,
+            AgentPhase.FIX: 2
+        }
+    
+    def set_dependencies(self, session_manager, tool_registry):
+        """Inject dependencies (session manager and tool registry)."""
+        self.session_manager = session_manager
+        self.tool_registry = tool_registry
+        
+        # Initialize coordination manager
+        if session_manager and not self.coordination_manager:
+            self.coordination_manager = CoordinationManager(session_manager)
+            
+            # Add custom coordination rules
+            self._setup_coordination_rules()
+    
+    def register_agent(self, phase: AgentPhase, agent: BaseAgent):
+        """Register an agent instance for a specific phase."""
+        self.agents[phase] = agent
+        agent.set_dependencies(self.session_manager, self.tool_registry)
+        self.logger.info(f"Registered {agent.name} agent for phase {phase}")
+    
+    def _setup_coordination_rules(self):
+        """Set up custom coordination rules for the orchestrator."""
+        if not self.coordination_manager:
+            return
+        
+        # Rule: Auto-retry on low confidence classification
+        self.coordination_manager.add_coordination_rule(CoordinationRule(
+            trigger_event=CoordinationEvent.AGENT_COMPLETE,
+            source_phase=AgentPhase.CLASSIFY,
+            condition=lambda data: (
+                data.get("classification", {}).get("confidence", 0) < 0.6 and
+                data.get("session_state", {}).get("retry_count", 0) < 2
+            ),
+            target_phase=AgentPhase.CLASSIFY,
+            priority=9
+        ))
+        
+        # Rule: Fast-track to validation for high confidence matches
+        self.coordination_manager.add_coordination_rule(CoordinationRule(
+            trigger_event=CoordinationEvent.AGENT_COMPLETE,
+            source_phase=AgentPhase.CLASSIFY,
+            condition=lambda data: (
+                data.get("classification", {}).get("confidence", 0) > 0.9 and
+                not data.get("classification", {}).get("has_diagnostic_question", False)
+            ),
+            target_phase=AgentPhase.VALIDATE,
+            priority=8
+        ))
+        
+        # Rule: Skip validation if fix agent already resolved the issue
+        self.coordination_manager.add_coordination_rule(CoordinationRule(
+            trigger_event=CoordinationEvent.AGENT_COMPLETE,
+            source_phase=AgentPhase.FIX,
+            condition=lambda data: (
+                data.get("fix", {}).get("fix_result") == "SUCCESS" and
+                data.get("fix", {}).get("verification", {}).get("issue_resolved", False)
+            ),
+            target_phase=AgentPhase.COMPLETE,
+            priority=10
+        ))
+    
+    async def execute(self, session_state: SessionState, **kwargs) -> Dict[str, Any]:
+        """
+        Execute the orchestrator coordination flow.
+        
+        Args:
+            session_state: Current session state
+            **kwargs: Additional parameters (user_input, agent_response, etc.)
+            
+        Returns:
+            Updated session state and orchestration results
+        """
+        start_time = datetime.now()
+        session_id = session_state.session_id
+        
+        try:
+            # Start coordination workflow if this is the first execution
+            if self.coordination_manager and kwargs.get("start_workflow", False):
+                await self.coordination_manager.start_session(session_id)
+            
+            # Add orchestration start event to timeline
+            await self._add_timeline_event(
+                session_id,
+                "SYSTEM",
+                "ORCHESTRATION_STARTED",
+                {"phase": session_state.current_phase, **kwargs}
+            )
+            
+            # Process any coordination events first
+            if self.coordination_manager and "coordination_event" in kwargs:
+                coordination_result = await self.coordination_manager.process_event(
+                    session_id,
+                    kwargs["coordination_event"],
+                    {"session_state": session_state, **kwargs}
+                )
+                
+                if coordination_result:
+                    # Coordination rule triggered a phase change
+                    await self.session_manager.update_session(
+                        session_id,
+                        {"current_phase": coordination_result}
+                    )
+                    session_state.current_phase = coordination_result
+            
+            # Execute the current phase
+            result = await self._execute_phase(session_state, **kwargs)
+            
+            # Process coordination event for agent completion
+            if self.coordination_manager and result.get("outcome") == "success":
+                coordination_result = await self.coordination_manager.process_event(
+                    session_id,
+                    CoordinationEvent.AGENT_COMPLETE,
+                    {"session_state": session_state, **result}
+                )
+                
+                if coordination_result and coordination_result != result.get("next_phase"):
+                    # Coordination rules override the normal flow
+                    result["next_phase"] = coordination_result
+                    result["coordination_override"] = True
+            
+            # Add completion event
+            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            await self._add_timeline_event(
+                session_id,
+                "SYSTEM", 
+                "ORCHESTRATION_COMPLETED",
+                {
+                    "next_phase": result.get("next_phase"),
+                    "duration_ms": duration_ms,
+                    "actions_taken": result.get("actions_taken", []),
+                    "coordination_override": result.get("coordination_override", False)
+                },
+                duration_ms
+            )
+            
+            # Check if workflow is complete
+            if result.get("next_phase") in [AgentPhase.COMPLETE, AgentPhase.ESCALATE]:
+                if self.coordination_manager:
+                    success = result.get("next_phase") == AgentPhase.COMPLETE
+                    await self.coordination_manager.complete_session(session_id, success)
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Orchestration error: {str(e)}")
+            
+            # Process error event in coordination
+            if self.coordination_manager:
+                await self.coordination_manager.process_event(
+                    session_id,
+                    CoordinationEvent.AGENT_ERROR,
+                    {"session_state": session_state, "error": str(e)}
+                )
+            
+            return await self.handle_error(e, session_state)
+    
+    async def _execute_phase(self, session_state: SessionState, **kwargs) -> Dict[str, Any]:
+        """Execute the current phase of the workflow."""
+        current_phase = session_state.current_phase
+        self.logger.info(f"Executing phase: {current_phase}")
+        
+        # Check if we have a registered agent for this phase
+        if current_phase not in self.agents:
+            return await self._handle_missing_agent(session_state, current_phase)
+        
+        agent = self.agents[current_phase]
+        
+        # Validate agent input
+        if not await agent.validate_input(session_state, **kwargs):
+            return await self._handle_invalid_input(session_state, current_phase)
+        
+        # Execute the agent
+        try:
+            agent_result = await agent.execute(session_state, **kwargs)
+            
+            # Process the result and determine next actions
+            return await self._process_agent_result(
+                session_state, current_phase, agent_result, **kwargs
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Agent execution error in {current_phase}: {str(e)}")
+            return await self._handle_agent_error(session_state, current_phase, e)
+    
+    async def _process_agent_result(
+        self, 
+        session_state: SessionState, 
+        phase: AgentPhase,
+        agent_result: Dict[str, Any],
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Process the result from an agent and determine next actions."""
+        
+        # Update session state with agent results
+        await self._update_session_with_agent_result(session_state, phase, agent_result)
+        
+        # Determine execution outcome
+        outcome = self._determine_execution_outcome(agent_result)
+        
+        # Get transition rules for this phase
+        transitions = self.state_transitions.get(phase, {})
+        transition_handler = transitions.get(outcome, self._handle_unknown_outcome)
+        
+        # Execute transition
+        next_phase = await transition_handler(session_state, agent_result, **kwargs)
+        
+        # Prepare response
+        response = {
+            "session_id": session_state.session_id,
+            "current_phase": session_state.current_phase,
+            "next_phase": next_phase,
+            "outcome": outcome,
+            "agent_result": agent_result,
+            "actions_taken": agent_result.get("actions_taken", []),
+            "requires_user_input": self._requires_user_input(next_phase, agent_result),
+            "messages": self._extract_response_messages(agent_result)
+        }
+        
+        # Update session phase if it's changing
+        if next_phase != session_state.current_phase:
+            await self.session_manager.update_session(
+                session_state.session_id,
+                {"current_phase": next_phase, "retry_count": 0}
+            )
+            response["phase_changed"] = True
+        
+        return response
+    
+    async def _update_session_with_agent_result(
+        self,
+        session_state: SessionState,
+        phase: AgentPhase,
+        agent_result: Dict[str, Any]
+    ):
+        """Update session state with the results from an agent."""
+        update_data = {}
+        
+        if phase == AgentPhase.CLASSIFY:
+            classification_data = agent_result.get("classification", {})
+            if classification_data:
+                update_data["classification"] = ClassificationResult(**classification_data)
+        
+        elif phase == AgentPhase.REQUIRED_INFO:
+            info_data = agent_result.get("required_info", {})
+            if info_data:
+                update_data["required_info"] = RequiredInfoResult(**info_data)
+        
+        elif phase == AgentPhase.VALIDATE:
+            validation_data = agent_result.get("validation", {})
+            if validation_data:
+                update_data["validation"] = ValidationResult(**validation_data)
+        
+        elif phase == AgentPhase.FIX:
+            fix_data = agent_result.get("fix", {})
+            if fix_data:
+                update_data["fix"] = FixResult(**fix_data)
+        
+        # Update session if we have changes
+        if update_data:
+            update_data["updated_at"] = datetime.now()
+            await self.session_manager.update_session(
+                session_state.session_id,
+                update_data
+            )
+    
+    def _determine_execution_outcome(self, agent_result: Dict[str, Any]) -> str:
+        """Determine if the agent execution was successful, failed, or needs retry."""
+        if agent_result.get("error"):
+            return "failure"
+        
+        if agent_result.get("success", False):
+            return "success"
+        
+        # Check for explicit outcome
+        outcome = agent_result.get("outcome", "failure")
+        return outcome
+    
+    async def _determine_next_after_classification(
+        self,
+        session_state: SessionState,
+        agent_result: Dict[str, Any],
+        **kwargs
+    ) -> AgentPhase:
+        """Determine next phase after classification."""
+        classification = session_state.classification
+        
+        if not classification or classification.confidence < 0.5:
+            return AgentPhase.ESCALATE
+        
+        # Check if we need more information
+        if classification.has_diagnostic_question:
+            return AgentPhase.REQUIRED_INFO
+        
+        # Move directly to validation if we have enough info
+        return AgentPhase.VALIDATE
+    
+    async def _determine_next_after_validation(
+        self,
+        session_state: SessionState,
+        agent_result: Dict[str, Any],
+        **kwargs
+    ) -> AgentPhase:
+        """Determine next phase after validation."""
+        validation = session_state.validation
+        
+        if not validation:
+            return AgentPhase.ESCALATE
+        
+        if validation.validation_result == "CONFIRMED" and validation.root_cause_confirmed:
+            return AgentPhase.FIX
+        elif validation.validation_result == "DIFFERENT_ISSUE":
+            return AgentPhase.CLASSIFY
+        elif validation.validation_result == "NOT_FOUND":
+            return AgentPhase.ESCALATE
+        else:
+            # UNCERTAIN - might need more info
+            return AgentPhase.REQUIRED_INFO
+    
+    async def _handle_classification_failure(
+        self,
+        session_state: SessionState,
+        agent_result: Dict[str, Any],
+        **kwargs
+    ) -> AgentPhase:
+        """Handle classification failure."""
+        session_state.retry_count += 1
+        
+        if session_state.retry_count >= self.max_retries[AgentPhase.CLASSIFY]:
+            await self.session_manager.update_session(
+                session_state.session_id,
+                {
+                    "retry_count": session_state.retry_count,
+                    "escalation_reason": "Classification failed after maximum retries"
+                }
+            )
+            return AgentPhase.ESCALATE
+        
+        return AgentPhase.CLASSIFY
+    
+    async def _handle_info_failure(
+        self,
+        session_state: SessionState,
+        agent_result: Dict[str, Any],
+        **kwargs
+    ) -> AgentPhase:
+        """Handle required info failure."""
+        session_state.retry_count += 1
+        
+        if session_state.retry_count >= self.max_retries[AgentPhase.REQUIRED_INFO]:
+            return AgentPhase.ESCALATE
+        
+        return AgentPhase.REQUIRED_INFO
+    
+    async def _handle_validation_failure(
+        self,
+        session_state: SessionState,
+        agent_result: Dict[str, Any],
+        **kwargs
+    ) -> AgentPhase:
+        """Handle validation failure."""
+        session_state.retry_count += 1
+        
+        if session_state.retry_count >= self.max_retries[AgentPhase.VALIDATE]:
+            return AgentPhase.ESCALATE
+        
+        return AgentPhase.VALIDATE
+    
+    async def _handle_fix_failure(
+        self,
+        session_state: SessionState,
+        agent_result: Dict[str, Any],
+        **kwargs
+    ) -> AgentPhase:
+        """Handle fix failure."""
+        session_state.retry_count += 1
+        
+        if session_state.retry_count >= self.max_retries[AgentPhase.FIX]:
+            return AgentPhase.ESCALATE
+        
+        return AgentPhase.FIX
+    
+    async def _handle_missing_agent(
+        self,
+        session_state: SessionState,
+        phase: AgentPhase
+    ) -> Dict[str, Any]:
+        """Handle case where no agent is registered for a phase."""
+        error_msg = f"No agent registered for phase: {phase}"
+        self.logger.error(error_msg)
+        
+        await self.session_manager.update_session(
+            session_state.session_id,
+            {
+                "escalation_reason": error_msg,
+                "current_phase": AgentPhase.ESCALATE
+            }
+        )
+        
+        return {
+            "session_id": session_state.session_id,
+            "current_phase": phase,
+            "next_phase": AgentPhase.ESCALATE,
+            "outcome": "failure",
+            "error": error_msg,
+            "actions_taken": [],
+            "requires_user_input": False,
+            "messages": [{"type": "error", "content": error_msg}]
+        }
+    
+    async def _handle_invalid_input(
+        self,
+        session_state: SessionState,
+        phase: AgentPhase
+    ) -> Dict[str, Any]:
+        """Handle invalid input for agent."""
+        error_msg = f"Invalid input for phase: {phase}"
+        self.logger.error(error_msg)
+        
+        return {
+            "session_id": session_state.session_id,
+            "current_phase": phase,
+            "next_phase": phase,
+            "outcome": "failure",
+            "error": error_msg,
+            "actions_taken": [],
+            "requires_user_input": True,
+            "messages": [{"type": "error", "content": error_msg}]
+        }
+    
+    async def _handle_agent_error(
+        self,
+        session_state: SessionState,
+        phase: AgentPhase,
+        error: Exception
+    ) -> Dict[str, Any]:
+        """Handle agent execution error."""
+        error_msg = f"Agent error in {phase}: {str(error)}"
+        self.logger.error(error_msg)
+        
+        await self._add_timeline_event(
+            session_state.session_id,
+            "SYSTEM",
+            "AGENT_ERROR",
+            {"phase": phase, "error": str(error)}
+        )
+        
+        return {
+            "session_id": session_state.session_id,
+            "current_phase": phase,
+            "next_phase": phase,
+            "outcome": "failure",
+            "error": error_msg,
+            "actions_taken": [],
+            "requires_user_input": False,
+            "messages": [{"type": "error", "content": "An error occurred while processing your request."}]
+        }
+    
+    async def _handle_unknown_outcome(
+        self,
+        session_state: SessionState,
+        agent_result: Dict[str, Any],
+        **kwargs
+    ) -> AgentPhase:
+        """Handle unknown outcome from agent."""
+        self.logger.warning(f"Unknown outcome: {agent_result}")
+        return AgentPhase.ESCALATE
+    
+    def _requires_user_input(self, next_phase: AgentPhase, agent_result: Dict[str, Any]) -> bool:
+        """Determine if user input is required."""
+        if next_phase == AgentPhase.REQUIRED_INFO:
+            return True
+        
+        if agent_result.get("requires_user_input", False):
+            return True
+        
+        return False
+    
+    def _extract_response_messages(self, agent_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract response messages from agent result."""
+        messages = []
+        
+        if "message" in agent_result:
+            messages.append({"type": "agent", "content": agent_result["message"]})
+        
+        if "questions" in agent_result:
+            for question in agent_result["questions"]:
+                messages.append({"type": "question", "content": question})
+        
+        if "error" in agent_result:
+            messages.append({"type": "error", "content": agent_result["error"]})
+        
+        return messages
+    
+    async def _add_timeline_event(
+        self,
+        session_id: str,
+        phase: str,
+        action: str,
+        details: Dict[str, Any],
+        duration_ms: Optional[int] = None
+    ):
+        """Add an event to the session timeline."""
+        if self.session_manager:
+            event = TimelineEvent(
+                phase=phase,
+                agent=self.name,
+                action=action,
+                details=details,
+                duration_ms=duration_ms
+            )
+            await self.session_manager.add_timeline_event(session_id, event)
+    
+    async def validate_input(self, session_state: SessionState, **kwargs) -> bool:
+        """Validate that the orchestrator can proceed with the current state."""
+        # Check if session is valid
+        if not session_state.session_id or not session_state.user_id:
+            return False
+        
+        # Check if current phase is valid
+        if session_state.current_phase not in AgentPhase:
+            return False
+        
+        # Check if we haven't exceeded maximum retries
+        max_retries_for_phase = self.max_retries.get(session_state.current_phase, 3)
+        if session_state.retry_count >= max_retries_for_phase:
+            return False
+        
+        return True
+    
+    async def handle_user_input(self, session_id: str, user_input: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle user input and process it through the coordination flow.
+        
+        Args:
+            session_id: Session identifier
+            user_input: User input data
+            
+        Returns:
+            Updated session state and response
+        """
+        session_state = await self.session_manager.get_session(session_id)
+        if not session_state:
+            return {
+                "error": "Session not found",
+                "session_id": session_id
+            }
+        
+        # Add user input to conversation history
+        await self.session_manager.add_conversation_message(
+            session_id,
+            user_input,
+            is_user=True
+        )
+        
+        # Process user input event in coordination
+        if self.coordination_manager:
+            coordination_result = await self.coordination_manager.process_event(
+                session_id,
+                CoordinationEvent.USER_INPUT,
+                {"session_state": session_state, "user_input": user_input}
+            )
+            
+            if coordination_result:
+                # Coordination rule triggered a phase change
+                await self.session_manager.update_session(
+                    session_id,
+                    {"current_phase": coordination_result}
+                )
+                session_state.current_phase = coordination_result
+        
+        # Execute the orchestrator with user input
+        return await self.execute(
+            session_state,
+            user_input=user_input,
+            coordination_event=CoordinationEvent.USER_INPUT
+        )
+    
+    async def get_coordination_metrics(self) -> Dict[str, Any]:
+        """Get coordination and workflow performance metrics."""
+        if not self.coordination_manager:
+            return {"error": "Coordination manager not initialized"}
+        
+        return self.coordination_manager.get_metrics()
+    
+    async def handle_error(self, error: Exception, session_state: SessionState) -> Dict[str, Any]:
+        """Handle errors that occur during orchestration."""
+        error_msg = f"Orchestrator error: {str(error)}"
+        self.logger.error(error_msg)
+        
+        # Add error to timeline
+        await self._add_timeline_event(
+            session_state.session_id,
+            "SYSTEM",
+            "ORCHESTRATOR_ERROR",
+            {"error": str(error), "phase": session_state.current_phase}
+        )
+        
+        # Escalate on orchestrator errors
+        await self.session_manager.update_session(
+            session_state.session_id,
+            {
+                "current_phase": AgentPhase.ESCALATE,
+                "escalation_reason": error_msg
+            }
+        )
+        
+        return {
+            "session_id": session_state.session_id,
+            "current_phase": session_state.current_phase,
+            "next_phase": AgentPhase.ESCALATE,
+            "outcome": "failure",
+            "error": error_msg,
+            "actions_taken": [],
+            "requires_user_input": False,
+            "messages": [{"type": "error", "content": "A system error occurred. Your request has been escalated."}]
+        }
