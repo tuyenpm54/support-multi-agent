@@ -11,9 +11,31 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 from enum import Enum
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
 
-from src.core.config import settings
+# Make tenacity optional
+try:
+    from tenacity import retry, stop_after_attempt, wait_exponential
+    HAS_TENACITY = True
+except ImportError:
+    HAS_TENACITY = False
+    
+    # Fallback retry decorator
+    def retry(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+    
+    def stop_after_attempt(n):
+        return n
+    
+    def wait_exponential(*args, **kwargs):
+        return 1
+
+# Use simple config to avoid Pydantic dependency
+try:
+    from src.core.config import settings
+except ImportError:
+    from src.core.simple_config import settings
 
 
 class LLMProvider(Enum):
@@ -60,9 +82,9 @@ class BaseLLMClient(ABC):
 class OpenAIClient(BaseLLMClient):
     """OpenAI API client."""
     
-    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", embedding_model: str = "text-embedding-3-small"):
-        super().__init__(api_key, model)
-        self.embedding_model = embedding_model
+    def __init__(self, api_key: str, model: str = None, embedding_model: str = None):
+        super().__init__(api_key, model or settings.openai_model)
+        self.embedding_model = embedding_model or settings.embedding_model
         self.base_url = "https://api.openai.com/v1"
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -78,7 +100,7 @@ class OpenAIClient(BaseLLMClient):
                 "model": self.model,
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": kwargs.get("max_tokens", 1000),
-                "temperature": kwargs.get("temperature", 0.7),
+                "temperature": kwargs.get("temperature", 0.3),
                 "top_p": kwargs.get("top_p", 1.0),
                 "frequency_penalty": kwargs.get("frequency_penalty", 0.0),
                 "presence_penalty": kwargs.get("presence_penalty", 0.0)
@@ -145,8 +167,8 @@ class OpenAIClient(BaseLLMClient):
 class AnthropicClient(BaseLLMClient):
     """Anthropic API client."""
     
-    def __init__(self, api_key: str, model: str = "claude-3-haiku-20240307"):
-        super().__init__(api_key, model)
+    def __init__(self, api_key: str, model: str = None):
+        super().__init__(api_key, model or settings.anthropic_model)
         self.base_url = "https://api.anthropic.com/v1"
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -233,12 +255,12 @@ class LLMManager:
     def _initialize_clients(self):
         """Initialize LLM clients based on configuration."""
         # Initialize OpenAI client
-        if settings.anthropic_api_key:
+        if settings.openai_api_key:
             try:
                 self.clients[LLMProvider.OPENAI] = OpenAIClient(
-                    api_key=settings.anthropic_api_key,
-                    model="gpt-3.5-turbo",
-                    embedding_model="text-embedding-3-small"
+                    api_key=settings.openai_api_key,
+                    model=settings.openai_model,
+                    embedding_model=settings.embedding_model
                 )
                 self.logger.info("OpenAI client initialized")
             except Exception as e:
@@ -249,7 +271,7 @@ class LLMManager:
             try:
                 self.clients[LLMProvider.ANTHROPIC] = AnthropicClient(
                     api_key=settings.anthropic_api_key,
-                    model="claude-3-haiku-20240307"
+                    model=settings.anthropic_model
                 )
                 self.logger.info("Anthropic client initialized")
             except Exception as e:

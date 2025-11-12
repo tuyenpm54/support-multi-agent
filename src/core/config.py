@@ -1,4 +1,7 @@
-from pydantic_settings import BaseSettings
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:
+    from pydantic import BaseSettings
 from typing import List, Optional
 import os
 
@@ -19,16 +22,16 @@ class Settings(BaseSettings):
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     
     # LLM Configuration
-    llm_provider: str = "openai"  # Default provider
-    llm_fallback_provider: str = "anthropic"
+    llm_provider: str = os.getenv("LLM_PROVIDER", "openai")  # Default provider
+    llm_fallback_provider: str = os.getenv("LLM_FALLBACK_PROVIDER", "anthropic")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     
     # Model Configuration
-    openai_model: str = "gpt-3.5-turbo"
-    anthropic_model: str = "claude-3-haiku-20240307"
-    embedding_model: str = "text-embedding-3-small"
-    embedding_dimensions: int = 1536
+    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+    anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-3-haiku-20240307")
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    embedding_dimensions: int = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
     
     # LLM Settings
     llm_temperature: float = 0.7

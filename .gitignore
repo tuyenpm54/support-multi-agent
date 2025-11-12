@@ -25,6 +25,7 @@ MANIFEST
 venv/
 env/
 ENV/
+.env
 
 # IDE
 .vscode/
@@ -79,6 +80,7 @@ yarn-error.log*
 
 # Documentation and Planning (local only)
 document/
+CLAUDE.md
 DEVELOPMENT.md
 *.md.bak
 

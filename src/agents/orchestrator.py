@@ -13,6 +13,7 @@ from src.core.state_manager import SessionManager
 from src.core.coordination import (
     CoordinationManager, CoordinationEvent, CoordinationRule
 )
+from src.core.orchestrator_preprocessor import get_orchestrator_preprocessor
 
 
 class OrchestratorState(Enum):
@@ -136,7 +137,7 @@ class OrchestratorAgent(BaseAgent):
     
     async def execute(self, session_state: SessionState, **kwargs) -> Dict[str, Any]:
         """
-        Execute the orchestrator coordination flow.
+        Execute the orchestrator coordination flow with intelligent preprocessing.
         
         Args:
             session_state: Current session state
@@ -149,6 +150,52 @@ class OrchestratorAgent(BaseAgent):
         session_id = session_state.session_id
         
         try:
+            # Preprocessing step: Analyze user input and determine best action
+            if "user_input" in kwargs:
+                preprocessing_result = await self._preprocess_user_input(
+                    session_state, kwargs["user_input"], **kwargs
+                )
+                
+                # Handle immediate response cases
+                if (preprocessing_result.success and 
+                    preprocessing_result.orchestrator_action.value == "respond_immediately"):
+                    
+                    await self._add_timeline_event(
+                        session_id,
+                        "SYSTEM",
+                        "IMMEDIATE_RESPONSE",
+                        {
+                            "preprocessing_confidence": preprocessing_result.confidence,
+                            "user_intent": preprocessing_result.user_intent.value,
+                            "response_time_ms": int((datetime.now() - start_time).total_seconds() * 1000)
+                        }
+                    )
+                    
+                    return {
+                        "session_id": session_id,
+                        "current_phase": session_state.current_phase,
+                        "next_phase": session_state.current_phase,  # No phase change
+                        "outcome": "immediate_response",
+                        "agent_result": {},
+                        "actions_taken": ["preprocessing_analyzed", "immediate_response"],
+                        "requires_user_input": True,
+                        "messages": [preprocessing_result.immediate_response],
+                        "preprocessing_result": preprocessing_result,
+                        "immediate_response": True
+                    }
+                
+                # Handle enhanced multi-turn conversation routing
+                if preprocessing_result.success and preprocessing_result.orchestrator_action.value not in ["respond_immediately"]:
+                    await self._handle_enhanced_routing(
+                        session_state, preprocessing_result, session_id, start_time
+                    )
+                    return await self._create_routing_response(
+                        session_state, preprocessing_result, session_id, start_time
+                    )
+                
+                # Add preprocessing insights to kwargs for downstream processing
+                kwargs["preprocessing_result"] = preprocessing_result
+            
             # Start coordination workflow if this is the first execution
             if self.coordination_manager and kwargs.get("start_workflow", False):
                 await self.coordination_manager.start_session(session_id)
@@ -177,7 +224,7 @@ class OrchestratorAgent(BaseAgent):
                     )
                     session_state.current_phase = coordination_result
             
-            # Execute the current phase
+            # Execute the current phase with preprocessing insights
             result = await self._execute_phase(session_state, **kwargs)
             
             # Process coordination event for agent completion
@@ -657,6 +704,88 @@ class OrchestratorAgent(BaseAgent):
         
         return self.coordination_manager.get_metrics()
     
+    async def _preprocess_user_input(
+        self,
+        session_state: SessionState,
+        user_input: str,
+        **kwargs
+    ) -> Any:
+        """
+        Preprocess user input using LLM analysis to determine optimal action.
+        
+        Args:
+            session_state: Current session state
+            user_input: User's message
+            **kwargs: Additional context
+            
+        Returns:
+            PreprocessingResult from LLM analysis
+        """
+        try:
+            # Get conversation history for context
+            conversation_history = await self.session_manager.get_conversation_history(
+                session_state.session_id, limit=5
+            )
+            
+            # Build session context
+            session_context = {
+                "session_id": session_state.session_id,
+                "current_phase": session_state.current_phase,
+                "retry_count": session_state.retry_count,
+                "conversation_length": len(conversation_history),
+                "session_duration": (datetime.now() - session_state.created_at).total_seconds()
+            }
+            
+            # Get preprocessor and analyze
+            preprocessor = await get_orchestrator_preprocessor()
+            preprocessing_result = await preprocessor.preprocess_user_input(
+                user_input=user_input,
+                current_state={
+                    "current_phase": session_state.current_phase.value,
+                    "session_id": session_state.session_id,
+                    "retry_count": session_state.retry_count
+                },
+                conversation_history=conversation_history,
+                session_context=session_context
+            )
+            
+            # Add preprocessing event to timeline
+            await self._add_timeline_event(
+                session_state.session_id,
+                "SYSTEM",
+                "PREPROCESSING_COMPLETED",
+                {
+                    "user_intent": preprocessing_result.user_intent.value,
+                    "orchestrator_action": preprocessing_result.orchestrator_action.value,
+                    "confidence": preprocessing_result.confidence,
+                    "processing_time_ms": preprocessing_result.processing_time.isoformat() if preprocessing_result.processing_time else None
+                }
+            )
+            
+            self.logger.info(f"Preprocessing completed: {preprocessing_result.user_intent.value} "
+                           f"→ {preprocessing_result.orchestrator_action.value} "
+                           f"(confidence: {preprocessing_result.confidence:.2f})")
+            
+            return preprocessing_result
+            
+        except Exception as e:
+            self.logger.error(f"Preprocessing failed: {str(e)}")
+            
+            # Return fallback result
+            from src.core.orchestrator_preprocessor import PreprocessingResult, UserIntent, OrchestratorAction
+            
+            return PreprocessingResult(
+                success=False,
+                user_intent=UserIntent.ISSUE_REPORT,
+                orchestrator_action=OrchestratorAction.START_CLASSIFICATION,
+                confidence=0.0,
+                error=str(e),
+                processing_time=datetime.now(),
+                extracted_entities={},
+                context_analysis={},
+                suggested_next_steps=["Proceeding with default classification workflow"]
+            )
+    
     async def handle_error(self, error: Exception, session_state: SessionState) -> Dict[str, Any]:
         """Handle errors that occur during orchestration."""
         error_msg = f"Orchestrator error: {str(error)}"
@@ -688,4 +817,185 @@ class OrchestratorAgent(BaseAgent):
             "actions_taken": [],
             "requires_user_input": False,
             "messages": [{"type": "error", "content": "A system error occurred. Your request has been escalated."}]
+        }
+    
+    async def _handle_enhanced_routing(
+        self,
+        session_state: SessionState,
+        preprocessing_result: Any,
+        session_id: str,
+        start_time: datetime
+    ):
+        """Handle enhanced routing for multi-turn conversations."""
+        
+        action = preprocessing_result.orchestrator_action.value
+        intent = preprocessing_result.user_intent.value
+        
+        # Add enhanced routing event to timeline
+        await self._add_timeline_event(
+            session_id,
+            "SYSTEM",
+            "ENHANCED_ROUTING",
+            {
+                "intent": intent,
+                "action": action,
+                "confidence": preprocessing_result.confidence,
+                "conversation_flow": preprocessing_result.context_analysis.get("conversation_flow", "unknown"),
+                "intent_evolution": preprocessing_result.context_analysis.get("intent_evolution", "unknown")
+            }
+        )
+        
+        # Handle specific multi-turn scenarios
+        if action in ["continue_workflow", "modify_classification"]:
+            # User is providing information or updating issue
+            await self._handle_follow_up_info(session_state, preprocessing_result)
+            
+        elif action in ["follow_up_clarification", "validate_solution"]:
+            # User needs clarification or solution validation
+            await self._handle_clarification_flow(session_state, preprocessing_result)
+            
+        elif action == "request_agent_switch":
+            # User wants to switch to different approach
+            await self._handle_agent_switch(session_state, preprocessing_result)
+            
+        elif action == "close_case":
+            # User wants to end conversation
+            await self._handle_case_closure(session_state, preprocessing_result)
+    
+    async def _handle_follow_up_info(
+        self,
+        session_state: SessionState,
+        preprocessing_result: Any
+    ):
+        """Handle follow-up information from user."""
+        
+        # Update session with new information
+        update_data = {
+            "user_provided_info": True,
+            "last_intent": preprocessing_result.user_intent.value,
+            "extracted_entities": preprocessing_result.extracted_entities,
+            "conversation_flow": "smooth"
+        }
+        
+        await self.session_manager.update_session(
+            session_state.session_id,
+            update_data
+        )
+        
+        self.logger.info(f"Follow-up info processed: {preprocessing_result.user_intent.value}")
+    
+    async def _handle_clarification_flow(
+        self,
+        session_state: SessionState,
+        preprocessing_result: Any
+    ):
+        """Handle clarification requests from user."""
+        
+        # Update session to indicate clarification needed
+        update_data = {
+            "clarification_needed": True,
+            "clarification_reason": preprocessing_result.user_intent.value,
+            "conversation_flow": "interrupted"
+        }
+        
+        await self.session_manager.update_session(
+            session_state.session_id,
+            update_data
+        )
+        
+        self.logger.info(f"Clarification flow: {preprocessing_result.user_intent.value}")
+    
+    async def _handle_agent_switch(
+        self,
+        session_state: SessionState,
+        preprocessing_result: Any
+    ):
+        """Handle request to switch to different agent approach."""
+        
+        # Determine which phase to switch to based on intent
+        target_phase = AgentPhase.CLASSIFY  # Default fallback
+        
+        if preprocessing_result.user_intent.value in ["issue_report", "update_issue"]:
+            target_phase = AgentPhase.CLASSIFY
+        elif preprocessing_result.user_intent.value in ["help_guidance", "product_info"]:
+            target_phase = AgentPhase.REQUIRED_INFO  # This could guide to documentation
+        
+        # Update session with agent switch
+        await self.session_manager.update_session(
+            session_state.session_id,
+            {
+                "current_phase": target_phase,
+                "agent_switch_requested": True,
+                "switch_reason": preprocessing_result.user_intent.value
+            }
+        )
+        
+        self.logger.info(f"Agent switch requested: {session_state.current_phase} → {target_phase}")
+    
+    async def _handle_case_closure(
+        self,
+        session_state: SessionState,
+        preprocessing_result: Any
+    ):
+        """Handle case closure requests."""
+        
+        # Update session for closure
+        await self.session_manager.update_session(
+            session_state.session_id,
+            {
+                "current_phase": AgentPhase.COMPLETE,
+                "closure_reason": preprocessing_result.user_intent.value,
+                "user_satisfaction": preprocessing_result.context_analysis.get("emotional_state", "neutral")
+            }
+        )
+        
+        self.logger.info(f"Case closure requested: {preprocessing_result.user_intent.value}")
+    
+    async def _create_routing_response(
+        self,
+        session_state: SessionState,
+        preprocessing_result: Any,
+        session_id: str,
+        start_time: datetime
+    ) -> Dict[str, Any]:
+        """Create response for enhanced routing scenarios."""
+        
+        # Determine if we have an immediate response or need to continue workflow
+        response_messages = []
+        if preprocessing_result.immediate_response:
+            response_messages.append(preprocessing_result.immediate_response)
+        
+        # Get next phase based on routing action
+        action = preprocessing_result.orchestrator_action.value
+        next_phase = session_state.current_phase
+        
+        if action == "modify_classification":
+            next_phase = AgentPhase.CLASSIFY
+        elif action == "continue_workflow":
+            # Continue with current phase's next logical step
+            if session_state.current_phase == AgentPhase.CLASSIFY:
+                next_phase = AgentPhase.REQUIRED_INFO
+            elif session_state.current_phase == AgentPhase.REQUIRED_INFO:
+                next_phase = AgentPhase.VALIDATE
+            elif session_state.current_phase == AgentPhase.VALIDATE:
+                next_phase = AgentPhase.FIX
+        elif action == "close_case":
+            next_phase = AgentPhase.COMPLETE
+        elif action == "escalate":
+            next_phase = AgentPhase.ESCALATE
+        
+        return {
+            "session_id": session_id,
+            "current_phase": session_state.current_phase,
+            "next_phase": next_phase,
+            "outcome": "enhanced_routing",
+            "agent_result": {},
+            "actions_taken": ["preprocessing_analyzed", "enhanced_routing"],
+            "requires_user_input": True,
+            "messages": response_messages,
+            "preprocessing_result": preprocessing_result,
+            "routing_action": action,
+            "intent_evolution": preprocessing_result.context_analysis.get("intent_evolution", "none"),
+            "conversation_flow": preprocessing_result.context_analysis.get("conversation_flow", "unknown"),
+            "phase_changed": next_phase != session_state.current_phase
         }
