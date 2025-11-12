@@ -14,6 +14,8 @@ from src.core.coordination import (
     CoordinationManager, CoordinationEvent, CoordinationRule
 )
 from src.core.orchestrator_preprocessor import get_orchestrator_preprocessor
+from src.services.llm_decision import get_llm_decision_service
+from src.models.session import OrchestratorDecision, Task, TaskType, SessionPhase, TaskStatus
 
 
 class OrchestratorState(Enum):
@@ -28,13 +30,13 @@ class OrchestratorState(Enum):
 
 class OrchestratorAgent(BaseAgent):
     """
-    Orchestrator agent responsible for coordinating the entire multi-agent workflow.
+    Enhanced orchestrator agent with LLM-based decision making and coordination flow.
     
-    Implements the state machine defined in the architecture document:
-    CLASSIFY → REQUIRED_INFO → VALIDATE → FIX → COMPLETE/ESCALATE
+    Integrates the LLM-based orchestrator design with the existing coordination system,
+    providing intelligent routing, task management, and hybrid decision making.
     """
     
-    def __init__(self):
+    def __init__(self, use_llm_decisions: bool = True):
         super().__init__("Orchestrator")
         self.logger = logging.getLogger(__name__)
         
@@ -43,6 +45,13 @@ class OrchestratorAgent(BaseAgent):
         
         # Coordination manager (will be set via dependencies)
         self.coordination_manager: Optional[CoordinationManager] = None
+        
+        # LLM decision integration
+        self.use_llm_decisions = use_llm_decisions
+        self.llm_decision_service = None
+        
+        # Task management
+        self.task_counter = 0
         
         # State transition rules
         self.state_transitions = {
@@ -87,6 +96,10 @@ class OrchestratorAgent(BaseAgent):
             
             # Add custom coordination rules
             self._setup_coordination_rules()
+        
+        # Initialize LLM decision service if enabled
+        if self.use_llm_decisions:
+            self.llm_decision_service = get_llm_decision_service()
     
     def register_agent(self, phase: AgentPhase, agent: BaseAgent):
         """Register an agent instance for a specific phase."""
@@ -152,21 +165,20 @@ class OrchestratorAgent(BaseAgent):
         try:
             # Preprocessing step: Analyze user input and determine best action
             if "user_input" in kwargs:
-                preprocessing_result = await self._preprocess_user_input(
+                orchestrator_decision = await self._preprocess_user_input(
                     session_state, kwargs["user_input"], **kwargs
                 )
                 
                 # Handle immediate response cases
-                if (preprocessing_result.success and 
-                    preprocessing_result.orchestrator_action.value == "respond_immediately"):
+                if orchestrator_decision.action == "forward_to_current_agent" and orchestrator_decision.user_message:
                     
                     await self._add_timeline_event(
                         session_id,
                         "SYSTEM",
                         "IMMEDIATE_RESPONSE",
                         {
-                            "preprocessing_confidence": preprocessing_result.confidence,
-                            "user_intent": preprocessing_result.user_intent.value,
+                            "decision_confidence": orchestrator_decision.confidence,
+                            "intent_type": orchestrator_decision.intent_type,
                             "response_time_ms": int((datetime.now() - start_time).total_seconds() * 1000)
                         }
                     )
@@ -179,22 +191,38 @@ class OrchestratorAgent(BaseAgent):
                         "agent_result": {},
                         "actions_taken": ["preprocessing_analyzed", "immediate_response"],
                         "requires_user_input": True,
-                        "messages": [preprocessing_result.immediate_response],
-                        "preprocessing_result": preprocessing_result,
+                        "messages": [orchestrator_decision.user_message],
+                        "orchestrator_decision": orchestrator_decision,
                         "immediate_response": True
                     }
                 
-                # Handle enhanced multi-turn conversation routing
-                if preprocessing_result.success and preprocessing_result.orchestrator_action.value not in ["respond_immediately"]:
-                    await self._handle_enhanced_routing(
-                        session_state, preprocessing_result, session_id, start_time
+                # Execute LLM decision if LLM decisions are enabled
+                if self.use_llm_decisions:
+                    result = await self._execute_llm_decision(
+                        orchestrator_decision,
+                        session_state,
+                        user_input=kwargs.get("user_input")
                     )
-                    return await self._create_routing_response(
-                        session_state, preprocessing_result, session_id, start_time
+                    
+                    # Add LLM decision completion event to timeline
+                    duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+                    await self._add_timeline_event(
+                        session_id,
+                        "LLM_ORCHESTRATOR",
+                        "LLM_DECISION_EXECUTED",
+                        {
+                            "action": orchestrator_decision.action,
+                            "intent_type": orchestrator_decision.intent_type,
+                            "confidence": orchestrator_decision.confidence,
+                            "cache_hit": orchestrator_decision.cache_hit
+                        },
+                        duration_ms
                     )
+                    
+                    return result
                 
-                # Add preprocessing insights to kwargs for downstream processing
-                kwargs["preprocessing_result"] = preprocessing_result
+                # Add decision insights to kwargs for downstream processing
+                kwargs["orchestrator_decision"] = orchestrator_decision
             
             # Start coordination workflow if this is the first execution
             if self.coordination_manager and kwargs.get("start_workflow", False):
@@ -699,19 +727,56 @@ class OrchestratorAgent(BaseAgent):
     
     async def get_coordination_metrics(self) -> Dict[str, Any]:
         """Get coordination and workflow performance metrics."""
-        if not self.coordination_manager:
-            return {"error": "Coordination manager not initialized"}
+        metrics = {}
         
-        return self.coordination_manager.get_metrics()
+        # Coordination metrics
+        if self.coordination_manager:
+            metrics["coordination"] = self.coordination_manager.get_metrics()
+        else:
+            metrics["coordination"] = {"error": "Coordination manager not initialized"}
+        
+        # LLM decision service metrics
+        if self.llm_decision_service:
+            metrics["llm_decisions"] = self.llm_decision_service.get_metrics()
+        else:
+            metrics["llm_decisions"] = {"error": "LLM decision service not initialized"}
+        
+        # Hybrid metrics
+        metrics["hybrid_orchestration"] = {
+            "llm_decisions_enabled": self.use_llm_decisions,
+            "coordination_rules_enabled": True,  # Always enabled
+            "total_tasks_processed": self.task_counter
+        }
+        
+        return metrics
+    
+    async def get_enhanced_metrics(self) -> Dict[str, Any]:
+        """Get comprehensive metrics including LLM decision performance."""
+        metrics = await self.get_coordination_metrics()
+        
+        # Add session state metrics
+        if self.session_manager:
+            try:
+                # This would typically be done through session state management
+                metrics["session_state"] = {
+                    "active_sessions": "N/A",  # Would need active session tracking
+                    "llm_decision_available": self.use_llm_decisions,
+                    "llm_decision_service_available": self.llm_decision_service is not None
+                }
+            except Exception as e:
+                self.logger.warning(f"Failed to get session metrics: {e}")
+                metrics["session_state"] = {"error": str(e)}
+        
+        return metrics
     
     async def _preprocess_user_input(
         self,
         session_state: SessionState,
         user_input: str,
         **kwargs
-    ) -> Any:
+    ) -> OrchestratorDecision:
         """
-        Preprocess user input using LLM analysis to determine optimal action.
+        Clean preprocessing using LLM decision service.
         
         Args:
             session_state: Current session state
@@ -719,34 +784,41 @@ class OrchestratorAgent(BaseAgent):
             **kwargs: Additional context
             
         Returns:
-            PreprocessingResult from LLM analysis
+            OrchestratorDecision with structured decision
         """
         try:
-            # Get conversation history for context
-            conversation_history = await self.session_manager.get_conversation_history(
-                session_state.session_id, limit=5
-            )
-            
             # Build session context
             session_context = {
                 "session_id": session_state.session_id,
                 "current_phase": session_state.current_phase,
                 "retry_count": session_state.retry_count,
-                "conversation_length": len(conversation_history),
+                "conversation_length": len(session_state.conversation_history),
                 "session_duration": (datetime.now() - session_state.created_at).total_seconds()
             }
             
-            # Get preprocessor and analyze
-            preprocessor = await get_orchestrator_preprocessor()
-            preprocessing_result = await preprocessor.preprocess_user_input(
+            # Use clean preprocessor
+            preprocessor = await get_orchestrator_preprocessor(enable_llm_decisions=self.use_llm_decisions)
+            orchestrator_decision = await preprocessor.preprocess_user_input(
                 user_input=user_input,
-                current_state={
-                    "current_phase": session_state.current_phase.value,
-                    "session_id": session_state.session_id,
-                    "retry_count": session_state.retry_count
-                },
-                conversation_history=conversation_history,
+                session_state=session_state,
                 session_context=session_context
+            )
+            
+            # Store LLM decision in session state
+            session_state.recent_decisions.append(orchestrator_decision)
+            if orchestrator_decision.cache_hit:
+                session_state.decision_cache_hits += 1
+            else:
+                session_state.decision_cache_misses += 1
+            
+            # Update session metrics
+            await self.session_manager.update_session(
+                session_state.session_id,
+                {
+                    "recent_decisions": session_state.recent_decisions[-10:],  # Keep last 10 decisions
+                    "decision_cache_hits": session_state.decision_cache_hits,
+                    "decision_cache_misses": session_state.decision_cache_misses
+                }
             )
             
             # Add preprocessing event to timeline
@@ -755,36 +827,462 @@ class OrchestratorAgent(BaseAgent):
                 "SYSTEM",
                 "PREPROCESSING_COMPLETED",
                 {
-                    "user_intent": preprocessing_result.user_intent.value,
-                    "orchestrator_action": preprocessing_result.orchestrator_action.value,
-                    "confidence": preprocessing_result.confidence,
-                    "processing_time_ms": preprocessing_result.processing_time.isoformat() if preprocessing_result.processing_time else None
+                    "intent_type": orchestrator_decision.intent_type,
+                    "action": orchestrator_decision.action,
+                    "confidence": orchestrator_decision.confidence,
+                    "llm_decision": orchestrator_decision.model_dump(),
+                    "processing_time_ms": orchestrator_decision.processing_time_ms,
+                    "cache_hit": orchestrator_decision.cache_hit
                 }
             )
             
-            self.logger.info(f"Preprocessing completed: {preprocessing_result.user_intent.value} "
-                           f"→ {preprocessing_result.orchestrator_action.value} "
-                           f"(confidence: {preprocessing_result.confidence:.2f})")
+            self.logger.info(f"Clean preprocessing completed: {orchestrator_decision.intent_type} "
+                           f"→ {orchestrator_decision.action} "
+                           f"(confidence: {orchestrator_decision.confidence:.2f})")
             
-            return preprocessing_result
+            return orchestrator_decision
             
         except Exception as e:
             self.logger.error(f"Preprocessing failed: {str(e)}")
             
-            # Return fallback result
-            from src.core.orchestrator_preprocessor import PreprocessingResult, UserIntent, OrchestratorAction
-            
-            return PreprocessingResult(
-                success=False,
-                user_intent=UserIntent.ISSUE_REPORT,
-                orchestrator_action=OrchestratorAction.START_CLASSIFICATION,
-                confidence=0.0,
-                error=str(e),
-                processing_time=datetime.now(),
+            # Return emergency fallback decision
+            return OrchestratorDecision(
+                intent_type="ambiguous",
+                action="ask_clarification",
+                confidence=0.1,
+                reasoning=f"Preprocessing failed: {str(e)}",
+                user_message="I'm having trouble processing your request. Could you please rephrase it?",
                 extracted_entities={},
-                context_analysis={},
-                suggested_next_steps=["Proceeding with default classification workflow"]
+                conversation_flow="interrupted",
+                emotional_state="neutral"
             )
+    
+    async def _execute_llm_decision(
+        self,
+        decision: OrchestratorDecision,
+        session_state: SessionState,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Execute an LLM-based decision with coordination integration.
+        
+        Args:
+            decision: LLM decision to execute
+            session_state: Current session state
+            **kwargs: Additional context
+            
+        Returns:
+            Execution result
+        """
+        try:
+            action = decision.action
+            self.logger.info(f"Executing LLM decision: {action} (confidence: {decision.confidence:.2f})")
+            
+            # Execute decision using LLM decision engine patterns
+            if action == "create_new_task":
+                return await self._llm_create_new_task(decision, session_state, **kwargs)
+            
+            elif action == "forward_to_current_agent":
+                return await self._llm_forward_to_current_agent(decision, session_state, **kwargs)
+            
+            elif action == "ask_task_switch_confirmation":
+                return await self._llm_ask_task_switch_confirmation(decision, session_state, **kwargs)
+            
+            elif action == "auto_switch_task":
+                return await self._llm_auto_switch_task(decision, session_state, **kwargs)
+            
+            elif action == "cancel_task":
+                return await self._llm_cancel_task(decision, session_state, **kwargs)
+            
+            elif action == "restart_task":
+                return await self._llm_restart_task(decision, session_state, **kwargs)
+            
+            elif action == "ask_clarification":
+                return await self._llm_ask_clarification(decision, session_state, **kwargs)
+            
+            elif action == "escalate":
+                return await self._llm_escalate(decision, session_state, **kwargs)
+            
+            else:
+                raise ValueError(f"Unknown LLM decision action: {action}")
+                
+        except Exception as e:
+            self.logger.error(f"LLM decision execution failed: {str(e)}")
+            # Fall back to coordination-based execution
+            return await self._execute_fallback(session_state, **kwargs)
+    
+    async def _llm_create_new_task(
+        self,
+        decision: OrchestratorDecision,
+        session_state: SessionState,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Create a new task based on LLM decision."""
+        
+        # Create task object
+        task_type = TaskType.ERROR_RESOLUTION
+        if decision.new_task_type == "feature_usage":
+            task_type = TaskType.FEATURE_USAGE
+        elif decision.new_task_type == "general_inquiry":
+            task_type = TaskType.GENERAL_INQUIRY
+        
+        new_task = Task(
+            task_id=f"TASK_{self._generate_task_id()}",
+            task_type=task_type,
+            status=TaskStatus.IN_PROGRESS,
+            current_phase=SessionPhase.CLASSIFY if task_type == TaskType.ERROR_RESOLUTION else SessionPhase.REQUIRED_INFO,
+            current_agent=decision.target_agent or self._get_initial_agent(task_type),
+            last_user_message=kwargs.get("user_input", ""),
+            priority=decision.priority,
+            decisions=[decision],
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        
+        # Update session state with new task
+        if session_state.active_task:
+            # Pause current task and move to pending
+            session_state.active_task.status = TaskStatus.PAUSED
+            session_state.pending_tasks.append(session_state.active_task)
+        
+        session_state.active_task = new_task
+        
+        # Add timeline event
+        await self._add_timeline_event(
+            session_state.session_id,
+            "LLM_ORCHESTRATOR",
+            "TASK_CREATED",
+            {
+                "task_id": new_task.task_id,
+                "task_type": new_task.task_type.value,
+                "agent": new_task.current_agent,
+                "decision_confidence": decision.confidence
+            }
+        )
+        
+        # Forward to agent
+        return await self._forward_to_agent(new_task, session_state, **kwargs)
+    
+    async def _llm_forward_to_current_agent(
+        self,
+        decision: OrchestratorDecision,
+        session_state: SessionState,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Forward to current agent as per LLM decision."""
+        
+        if not session_state.active_task:
+            raise ValueError("No active task to forward to")
+        
+        # Update active task with new decision
+        session_state.active_task.decisions.append(decision)
+        session_state.active_task.updated_at = datetime.now()
+        
+        # Add timeline event
+        await self._add_timeline_event(
+            session_state.session_id,
+            "LLM_ORCHESTRATOR",
+            "FORWARD_TO_AGENT",
+            {
+                "task_id": session_state.active_task.task_id,
+                "agent": session_state.active_task.current_agent,
+                "decision_confidence": decision.confidence
+            }
+        )
+        
+        # Forward to agent
+        return await self._forward_to_agent(session_state.active_task, session_state, **kwargs)
+    
+    async def _llm_ask_task_switch_confirmation(
+        self,
+        decision: OrchestratorDecision,
+        session_state: SessionState,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Ask user for task switch confirmation."""
+        
+        if session_state.active_task:
+            session_state.active_task.current_phase = SessionPhase.WAIT_USER_SELECT
+            session_state.active_task.waiting_for = "task_switch_decision"
+            session_state.active_task.decisions.append(decision)
+        
+        return {
+            "session_id": session_state.session_id,
+            "current_phase": session_state.current_phase,
+            "next_phase": SessionPhase.WAIT_USER_SELECT,
+            "outcome": "awaiting_user_decision",
+            "agent_result": {},
+            "actions_taken": ["ask_task_switch_confirmation"],
+            "requires_user_input": True,
+            "messages": [{
+                "type": "question",
+                "content": decision.user_message or "You have multiple requests. Please choose which to continue with."
+            }],
+            "user_options": decision.user_options or ["1", "2", "3"],
+            "orchestrator_decision": decision.model_dump()
+        }
+    
+    async def _llm_auto_switch_task(
+        self,
+        decision: OrchestratorDecision,
+        session_state: SessionState,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Automatically switch tasks based on LLM decision."""
+        
+        # Pause current task if exists
+        if session_state.active_task:
+            session_state.active_task.status = TaskStatus.PAUSED
+            session_state.active_task.decisions.append(decision)
+            session_state.pending_tasks.append(session_state.active_task)
+        
+        # Create new task
+        task_type = TaskType.ERROR_RESOLUTION
+        if decision.new_task_type == "feature_usage":
+            task_type = TaskType.FEATURE_USAGE
+        elif decision.new_task_type == "general_inquiry":
+            task_type = TaskType.GENERAL_INQUIRY
+        
+        new_task = Task(
+            task_id=f"TASK_{self._generate_task_id()}",
+            task_type=task_type,
+            status=TaskStatus.IN_PROGRESS,
+            current_phase=SessionPhase.CLASSIFY if task_type == TaskType.ERROR_RESOLUTION else SessionPhase.REQUIRED_INFO,
+            current_agent=decision.target_agent or self._get_initial_agent(task_type),
+            last_user_message=kwargs.get("user_input", ""),
+            priority=decision.priority,
+            decisions=[decision],
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        
+        session_state.active_task = new_task
+        
+        # Add timeline event
+        await self._add_timeline_event(
+            session_state.session_id,
+            "LLM_ORCHESTRATOR",
+            "AUTO_TASK_SWITCH",
+            {
+                "new_task_id": new_task.task_id,
+                "paused_tasks": len(session_state.pending_tasks),
+                "decision_confidence": decision.confidence
+            }
+        )
+        
+        # Forward to agent
+        result = await self._forward_to_agent(new_task, session_state, **kwargs)
+        
+        # Add notification
+        if decision.user_message:
+            result["notification"] = decision.user_message
+        
+        return result
+    
+    async def _llm_cancel_task(
+        self,
+        decision: OrchestratorDecision,
+        session_state: SessionState,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Cancel current task as per LLM decision."""
+        
+        if session_state.active_task:
+            session_state.active_task.status = TaskStatus.CANCELLED
+            session_state.active_task.decisions.append(decision)
+            session_state.completed_tasks.append(session_state.active_task)
+            session_state.active_task = None
+        
+        # Add timeline event
+        await self._add_timeline_event(
+            session_state.session_id,
+            "LLM_ORCHESTRATOR",
+            "TASK_CANCELLED",
+            {"decision_confidence": decision.confidence}
+        )
+        
+        return {
+            "session_id": session_state.session_id,
+            "current_phase": AgentPhase.COMPLETE,
+            "next_phase": AgentPhase.IDLE,
+            "outcome": "cancelled",
+            "agent_result": {},
+            "actions_taken": ["cancel_task"],
+            "requires_user_input": False,
+            "messages": [{
+                "type": "info",
+                "content": decision.user_message or "Request has been cancelled."
+            }],
+            "orchestrator_decision": decision.model_dump()
+        }
+    
+    async def _llm_restart_task(
+        self,
+        decision: OrchestratorDecision,
+        session_state: SessionState,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Restart current task as per LLM decision."""
+        
+        if session_state.active_task:
+            # Reset task to initial phase
+            session_state.active_task.current_phase = SessionPhase.CLASSIFY
+            session_state.active_task.current_agent = "classifier_agent"
+            session_state.active_task.status = TaskStatus.IN_PROGRESS
+            session_state.active_task.decisions.append(decision)
+            session_state.active_task.updated_at = datetime.now()
+            
+            # Clear previous results
+            session_state.active_task.classification = None
+            session_state.active_task.required_info = None
+            session_state.active_task.validation = None
+            session_state.active_task.fix = None
+            
+            # Add timeline event
+            await self._add_timeline_event(
+                session_state.session_id,
+                "LLM_ORCHESTRATOR",
+                "TASK_RESTARTED",
+                {
+                    "task_id": session_state.active_task.task_id,
+                    "decision_confidence": decision.confidence
+                }
+            )
+            
+            # Forward to classifier
+            return await self._forward_to_agent(session_state.active_task, session_state, **kwargs)
+        
+        return {
+            "session_id": session_state.session_id,
+            "current_phase": session_state.current_phase,
+            "next_phase": session_state.current_phase,
+            "outcome": "no_active_task",
+            "agent_result": {},
+            "actions_taken": [],
+            "requires_user_input": False,
+            "messages": [{
+                "type": "info",
+                "content": "No active task to restart."
+            }]
+        }
+    
+    async def _llm_ask_clarification(
+        self,
+        decision: OrchestratorDecision,
+        session_state: SessionState,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Ask for clarification as per LLM decision."""
+        
+        if session_state.active_task:
+            session_state.active_task.current_phase = SessionPhase.WAIT_USER_CLARIFY
+            session_state.active_task.waiting_for = "clarification"
+            session_state.active_task.decisions.append(decision)
+        
+        return {
+            "session_id": session_state.session_id,
+            "current_phase": SessionPhase.WAIT_USER_CLARIFY,
+            "next_phase": SessionPhase.WAIT_USER_CLARIFY,
+            "outcome": "awaiting_clarification",
+            "agent_result": {},
+            "actions_taken": ["ask_clarification"],
+            "requires_user_input": True,
+            "messages": [{
+                "type": "question",
+                "content": decision.user_message or "I need more information to help you properly. Could you please provide more details?"
+            }],
+            "orchestrator_decision": decision.model_dump()
+        }
+    
+    async def _llm_escalate(
+        self,
+        decision: OrchestratorDecision,
+        session_state: SessionState,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Escalate to human as per LLM decision."""
+        
+        if session_state.active_task:
+            session_state.active_task.status = TaskStatus.FAILED
+            session_state.active_task.decisions.append(decision)
+            session_state.completed_tasks.append(session_state.active_task)
+            session_state.active_task = None
+        
+        # Add timeline event
+        await self._add_timeline_event(
+            session_state.session_id,
+            "LLM_ORCHESTRATOR",
+            "ESCALATED",
+            {
+                "reason": decision.reasoning,
+                "confidence": decision.confidence
+            }
+        )
+        
+        return {
+            "session_id": session_state.session_id,
+            "current_phase": AgentPhase.ESCALATE,
+            "next_phase": AgentPhase.ESCALATE,
+            "outcome": "escalated",
+            "agent_result": {},
+            "actions_taken": ["escalate"],
+            "requires_user_input": False,
+            "messages": [{
+                "type": "info",
+                "content": "Your request has been escalated to a human specialist for assistance."
+            }],
+            "orchestrator_decision": decision.model_dump()
+        }
+    
+    def _generate_task_id(self) -> str:
+        """Generate unique task ID."""
+        import uuid
+        self.task_counter += 1
+        return str(uuid.uuid4())[:8]
+    
+    def _get_initial_agent(self, task_type: TaskType) -> str:
+        """Determine initial agent based on task type."""
+        if task_type == TaskType.ERROR_RESOLUTION:
+            return "classifier_agent"
+        elif task_type == TaskType.FEATURE_USAGE:
+            return "knowledge_agent"
+        elif task_type == TaskType.GENERAL_INQUIRY:
+            return "knowledge_agent"
+        else:
+            return "classifier_agent"  # Default
+    
+    async def _forward_to_agent(
+        self,
+        task: Task,
+        session_state: SessionState,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Forward task to appropriate agent."""
+        
+        if task.current_agent not in self.agents:
+            raise ValueError(f"Agent not registered: {task.current_agent}")
+        
+        agent = self.agents[task.current_agent]
+        
+        # Execute agent
+        agent_result = await agent.execute(session_state, **kwargs)
+        
+        # Update session phase based on agent result
+        if hasattr(session_state, 'current_phase'):
+            # Convert AgentPhase to SessionPhase for active task
+            if hasattr(SessionPhase, session_state.current_phase.value):
+                task.current_phase = SessionPhase[session_state.current_phase.value]
+        
+        return {
+            "session_id": session_state.session_id,
+            "current_phase": session_state.current_phase,
+            "next_phase": agent_result.get("next_phase", session_state.current_phase),
+            "outcome": agent_result.get("outcome", "success"),
+            "agent_result": agent_result,
+            "actions_taken": agent_result.get("actions_taken", []),
+            "requires_user_input": agent_result.get("requires_user_input", False),
+            "messages": agent_result.get("messages", [])
+        }
     
     async def handle_error(self, error: Exception, session_state: SessionState) -> Dict[str, Any]:
         """Handle errors that occur during orchestration."""
