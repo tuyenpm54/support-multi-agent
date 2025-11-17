@@ -10,14 +10,9 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from datetime import datetime
-import asyncpg
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text
 
 from src.core.config import settings
-from src.core.embeddings import get_embedding_service, EmbeddingService
-from src.models.session import ClassificationResult, SearchResult
+from src.models.session import SearchResult, ClassificationResult
 
 
 class VectorSearchService:

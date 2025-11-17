@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import re
 from datetime import datetime
+from src.core.prompts import DIAGNOSTIC_QUESTION_TEMPLATES
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +90,8 @@ class DiagnosticQuestionGenerator:
                 id="formula_no_template",
                 category="formula",
                 question_type=QuestionType.ROOT_CAUSE,
-                template="Which specific item or menu item is showing {no_price}?",
-                vietnamese_template="Món hàng hoặc sản phẩm cụ thể nào đang bị {no_price}?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['formula_no_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['formula_no_template']['vi'],
                 required_entities=["menu_item", "product"],
                 priority=10,
                 follow_up_questions=["formula_when_started", "formula_affected_items"]
@@ -100,8 +101,8 @@ class DiagnosticQuestionGenerator:
                 id="formula_incorrect_template", 
                 category="formula",
                 question_type=QuestionType.VERIFICATION,
-                template="What was the {incorrect_price} before the recent {formula_change}?",
-                vietnamese_template="Giá {incorrect_price} là bao nhiêu trước khi có {formula_change} gần đây?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['formula_incorrect_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['formula_incorrect_template']['vi'],
                 required_entities=["price", "change"],
                 priority=9,
                 follow_up_questions=["formula_change_details", "formula_expected_price"]
@@ -111,8 +112,8 @@ class DiagnosticQuestionGenerator:
                 id="formula_change_details",
                 category="formula", 
                 question_type=QuestionType.CONTEXT,
-                template="Can you describe what {formula_modifications} were made?",
-                vietnamese_template="Bạn có thể mô tả những {formula_modifications} nào đã được thực hiện không?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['formula_change_details']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['formula_change_details']['vi'],
                 required_entities=["modifications"],
                 priority=8
             ),
@@ -122,8 +123,8 @@ class DiagnosticQuestionGenerator:
                 id="sync_pos_template",
                 category="data_sync",
                 question_type=QuestionType.TROUBLESHOOTING,
-                template="When was the last time {data_sync} was successful?",
-                vietnamese_template="Lần cuối cùng {data_sync} thành công là khi nào?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['sync_pos_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['sync_pos_template']['vi'],
                 required_entities=["sync_time", "system"],
                 priority=9,
                 follow_up_questions=["sync_error_messages", "sync_affected_data"]
@@ -133,8 +134,8 @@ class DiagnosticQuestionGenerator:
                 id="sync_warehouse_template",
                 category="data_sync",
                 question_type=QuestionType.ISOLATION,
-                template="Is the {sync_issue} affecting {specific_warehouse} or multiple locations?",
-                vietnamese_template="Vấn đề {sync_issue} có ảnh hưởng đến {specific_warehouse} hay nhiều địa điểm không?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['sync_warehouse_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['sync_warehouse_template']['vi'],
                 required_entities=["warehouse", "locations"],
                 priority=8
             ),
@@ -144,8 +145,8 @@ class DiagnosticQuestionGenerator:
                 id="config_blacklist_template",
                 category="configuration",
                 question_type=QuestionType.ROOT_CAUSE,
-                template="Why was the {warehouse} placed on the {blacklist}?",
-                vietnamese_template="Tại sao {warehouse} bị đưa vào {blacklist}?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['config_blacklist_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['config_blacklist_template']['vi'],
                 required_entities=["warehouse", "reason"],
                 priority=10,
                 follow_up_questions=["config_blacklist_duration", "config_impact"]
@@ -155,8 +156,8 @@ class DiagnosticQuestionGenerator:
                 id="config_performance_template",
                 category="configuration",
                 question_type=QuestionType.VERIFICATION,
-                template="What are the current {performance_settings} for the {affected_system}?",
-                vietnamese_template="Các {performance_settings} hiện tại của {affected_system} là gì?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['config_performance_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['config_performance_template']['vi'],
                 required_entities=["settings", "system"],
                 priority=7
             ),
@@ -166,8 +167,8 @@ class DiagnosticQuestionGenerator:
                 id="quality_outlier_template",
                 category="data_quality",
                 question_type=QuestionType.CLARIFICATION,
-                template="What makes you believe the {price_data} is {abnormal}?",
-                vietnamese_template="Điều gì khiến bạn tin rằng {price_data} đang {abnormal}?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['quality_outlier_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['quality_outlier_template']['vi'],
                 required_entities=["price", "abnormal_behavior"],
                 priority=8,
                 follow_up_questions=["quality_expected_range", "quality_source_data"]
@@ -177,8 +178,8 @@ class DiagnosticQuestionGenerator:
                 id="quality_missing_template",
                 category="data_quality",
                 question_type=QuestionType.ISOLATION,
-                template="Which {time_period} is showing the {missing_data}?",
-                vietnamese_template="Khoảng {time_period} nào đang có {missing_data}?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['quality_missing_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['quality_missing_template']['vi'],
                 required_entities=["time_period", "data_type"],
                 priority=9
             ),
@@ -188,8 +189,8 @@ class DiagnosticQuestionGenerator:
                 id="performance_slow_template",
                 category="performance",
                 question_type=QuestionType.TROUBLESHOOTING,
-                template="How long does the {slow_operation} typically take?",
-                vietnamese_template="Thao tác {slow_operation} thường mất bao lâu?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['performance_slow_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['performance_slow_template']['vi'],
                 required_entities=["operation", "duration"],
                 priority=8,
                 follow_up_questions=["performance_recent_changes", "performance_comparison"]
@@ -200,8 +201,8 @@ class DiagnosticQuestionGenerator:
                 id="status_error_template",
                 category="system_status",
                 question_type=QuestionType.VERIFICATION,
-                template="What is the exact {error_message} you're seeing?",
-                vietnamese_template="Thông báo {error_message} chính xác mà bạn đang thấy là gì?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['status_error_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['status_error_template']['vi'],
                 required_entities=["error_message", "context"],
                 priority=10
             ),
@@ -211,8 +212,8 @@ class DiagnosticQuestionGenerator:
                 id="context_time_template",
                 category="context",
                 question_type=QuestionType.CONTEXT,
-                template="When did you first notice this {issue}?",
-                vietnamese_template="Bạn lần đầu tiên nhận thấy vấn đề {issue} này khi nào?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['context_time_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['context_time_template']['vi'],
                 priority=6
             ),
             
@@ -220,8 +221,8 @@ class DiagnosticQuestionGenerator:
                 id="context_impact_template",
                 category="context",
                 question_type=QuestionType.IMPACT_ASSESSMENT,
-                template="How is this {problem} affecting your {operations}?",
-                vietnamese_template="Vấn đề {problem} này đang ảnh hưởng đến {operations} của bạn như thế nào?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['context_impact_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['context_impact_template']['vi'],
                 priority=7
             ),
             
@@ -229,8 +230,8 @@ class DiagnosticQuestionGenerator:
                 id="context_scope_template", 
                 category="context",
                 question_type=QuestionType.ISOLATION,
-                template="Is this affecting {all_users} or just {specific_users}?",
-                vietnamese_template="Vấn đề này có ảnh hưởng đến {all_users} hay chỉ {specific_users} không?",
+                template=DIAGNOSTIC_QUESTION_TEMPLATES['context_scope_template']['en'],
+                vietnamese_template=DIAGNOSTIC_QUESTION_TEMPLATES['context_scope_template']['vi'],
                 priority=7
             )
         }

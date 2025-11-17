@@ -1,7 +1,13 @@
 try:
     from pydantic_settings import BaseSettings
 except ImportError:
-    from pydantic import BaseSettings
+    try:
+        from pydantic import BaseSettings
+    except ImportError:
+        raise ImportError(
+            "Neither pydantic-settings nor pydantic.BaseSettings found. "
+            "Please install pydantic-settings: pip install pydantic-settings"
+        )
 from typing import List, Optional
 import os
 
@@ -80,3 +86,8 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+
+
+def get_config() -> Settings:
+    """Get the global settings instance."""
+    return settings
