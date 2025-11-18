@@ -4,7 +4,6 @@ from pydantic import BaseModel
 
 from src.core.state_manager import session_manager
 from src.models.session import SessionState
-from src.agents.orchestrator import orchestrator
 
 
 router = APIRouter()
@@ -35,11 +34,7 @@ async def create_session(request: SessionCreateRequest):
             user_metadata=request.user_metadata
         )
         
-        # Start workflow for this session
-        if orchestrator:
-            session_state = await session_manager.get_session(session_id)
-            if session_state:
-                await orchestrator.execute(session_state, start_workflow=True)
+        # Session created successfully - workflow will be started on first message
         
         return {
             "session_id": session_id,

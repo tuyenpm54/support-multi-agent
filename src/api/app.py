@@ -9,7 +9,7 @@ from src.core.config import settings
 from src.core.state_manager import SessionManager, session_manager
 from src.agents.orchestrator import OrchestratorAgent
 from src.models.session import SessionState
-from src.api.routers import sessions, conversations, agents
+from src.api.routers import sessions, chat, agents
 
 
 # Configure logging
@@ -36,6 +36,9 @@ async def lifespan(app: FastAPI):
     
     # Set up dependencies
     orchestrator.set_dependencies(session_manager, None)  # Tool registry to be added later
+    
+    # Set orchestrator instance for unified chat router
+    chat.set_orchestrator_instance(orchestrator)
     
     logger.info("System started successfully")
     
@@ -73,7 +76,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(sessions.router, prefix=f"{settings.api_v1_str}/sessions", tags=["sessions"])
-app.include_router(conversations.router, prefix=f"{settings.api_v1_str}/conversations", tags=["conversations"])
+app.include_router(chat.router, prefix=f"{settings.api_v1_str}", tags=["chat"])
 app.include_router(agents.router, prefix=f"{settings.api_v1_str}/agents", tags=["agents"])
 
 

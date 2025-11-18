@@ -106,12 +106,17 @@ class OpenAIClient(BaseLLMClient):
                 "presence_penalty": kwargs.get("presence_penalty", 0.0)
             }
             
+            print(f"🔥 OPENAI API CALL: {self.base_url}/chat/completions")
+            print(f"🔥 Model: {self.model}")
+            print(f"🔥 API Key starts with: {self.api_key[:10]}...")
             response = await self.client.post("/chat/completions", json=payload)
+            print(f"🔥 Response status: {response.status_code}")
             response.raise_for_status()
             
             data = response.json()
             content = data["choices"][0]["message"]["content"]
             tokens_used = data["usage"]["total_tokens"]
+            print(f"🔥 Tokens used: {tokens_used} (prompt: {data['usage']['prompt_tokens']}, completion: {data['usage']['completion_tokens']})")
             
             return LLMResponse(
                 content=content,

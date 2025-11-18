@@ -2,15 +2,93 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Session Startup Workflow - MUST DO FIRST!
+
+**Before starting any work, always run this startup checklist:**
+
+```bash
+# 1. Check current git status
+git status
+
+# 2. Check recent commits to understand what's been done
+git log --oneline -5
+
+# 3. Check current task status
+cat document/tasks.md | grep -A 20 -B 5 "🚧\|📋"
+
+# 4. Identify the next task to work on
+# Look for: 📋 PLANNED tasks in Phase 2 (or current phase)
+```
+
+**Current Project Context (as of session start):**
+- **Phase Status**: Phase 2 - Core Agent Implementation
+- **Completed**: LLM integration, Embedding generation, Vector similarity search
+- **Next Priority**: Issue classification engine
+- **Current Branch**: main
+- **Dependencies**: Need to run `make install` if not already done
+
+**Quick Session Startup (run this command first):**
+```bash
+# One-liner to check everything quickly:
+echo "=== SESSION STARTUP ===" && git status && echo "=== RECENT COMMITS ===" && git log --oneline -3 && echo "=== NEXT TASKS ===" && grep -n "📋\|🚧" document/tasks.md | head -5
+```
+
+**Manual Version (if above doesn't work):**
+```bash
+git status
+git log --oneline -3  
+grep -n "📋\|🚧" document/tasks.md | head -5
+```
+
 ## Task Management Workflow
 
-ALWAYS follow this workflow when performing tasks:
+After checking the current status:
 
-1. **Check tasks.md first** - Review current task status before starting any work
-2. **Check plan.md** - Understand strategic context when unsure what to do
-3. **Update task.md** - Add new tasks with "🚧 In Progress" status before starting implementation
-4. **Commit changes** - Commit each completed task with clear commit message
-5. **Update task.md** - Change task status to "✅ Completed" with completion date
+1. **Identify next task** - Find the next 📋 PLANNED task based on dependencies
+2. **Update task.md** - Change the task to "🚧 In Progress" before starting
+3. **Create TodoWrite list** - Break down the task into implementation steps
+4. **Implement** - Write the code following the workflow
+5. **Test** - Verify the implementation works
+6. **Commit** - Commit with clear message using the template
+7. **Update task.md** - Change to "✅ Completed" with completion date
+
+## Commit Message Templates
+
+Use these templates for consistent commit messages:
+
+**Feature Implementation:**
+```bash
+git commit -m "🚀 [Feature Name] - Brief description
+
+Key components implemented:
+- Component A: What was built
+- Component B: Key functionality
+- Tests: Test coverage included
+
+🤖 Generated with [Claude Code](https://claude.ai/code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+**Fix/Update:**
+```bash
+git commit -m "🔧 [Fix/Update Name] - Brief description
+
+Changes made:
+- Fixed issue with X
+- Updated Y to work with Z
+- Added validation for edge cases
+
+🤖 Generated with [Claude Code](https://claude.ai/code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+**Current Task Context (for quick reference):**
+- **Active Phase**: Phase 2 - Core Agent Implementation  
+- **Next Task**: Issue classification engine (📋 PLANNED)
+- **Dependencies**: Vector search ✅, Embeddings ✅, LLM ✅
+- **Files to Focus**: `src/agents/` directory for new agents
 
 ## Development Commands
 

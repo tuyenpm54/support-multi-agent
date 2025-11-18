@@ -13,6 +13,7 @@ import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from functools import lru_cache
+import os
 
 from src.models.session import (
     SessionState, OrchestratorDecision, Task, TaskType, 
@@ -23,6 +24,7 @@ from src.core.prompts import (
     default_llm_orchestrator_optimized_system_prompt,
     USER_ORCHESTRATOR_PROMPT_TEMPLATE,
 )
+from src.core.llm import LLMManager
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,14 @@ class LLMDecisionService:
     
     def __init__(self, llm_client=None):
         """Initialize the LLM decision service."""
-        self.llm_client = llm_client
+        # Initialize LLM manager if no client provided
+        if llm_client is None:
+            self.llm_manager = LLMManager()
+            self.llm_client = self.llm_manager
+        else:
+            self.llm_client = llm_client
+            self.llm_manager = None
+            
         self.logger = logging.getLogger(__name__)
         
         # Configuration
@@ -45,6 +54,11 @@ class LLMDecisionService:
         self.decision_cache = {}
         self.cache_ttl = timedelta(hours=1)  # Cache decisions for 1 hour
         self.max_cache_size = 1000
+        
+        # LLM log file configuration
+        self.llm_log_file = "llm_log.jsonl"
+        self.llm_log_dir = "logs"
+        self._setup_log_directory()
         
         # Metrics tracking
         self.metrics = {
@@ -59,6 +73,31 @@ class LLMDecisionService:
         # System prompt
         self.system_prompt = default_llm_orchestrator_optimized_system_prompt
     
+    def _setup_log_directory(self):
+        """Create logs directory if it doesn't exist."""
+        os.makedirs(self.llm_log_dir, exist_ok=True)
+        self.llm_log_path = os.path.join(self.llm_log_dir, self.llm_log_file)
+    
+    def _log_llm_interaction(self, interaction_type: str, request_data: Dict[str, Any], 
+                        response_data: Dict[str, Any], session_id: str = None):
+        """Log LLM interaction to file in JSONL format."""
+        try:
+            log_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "type": interaction_type,
+                "session_id": session_id,
+                "request": request_data,
+                "response": response_data,
+                "processing_time_ms": response_data.get("processing_time_ms", 0)
+            }
+            
+            # Append to log file
+            with open(self.llm_log_path, mode='a', encoding='utf-8') as f:
+                f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+                
+        except Exception as e:
+            self.logger.error(f"Failed to log LLM interaction: {str(e)}")
+    
     async def make_decision(
         self,
         user_message: str,
@@ -69,18 +108,27 @@ class LLMDecisionService:
         Make an LLM-based decision for orchestrator routing.
         
         Args:
-            user_message: The user's input message
+            user_message: The user's input message (can be string or dict with 'message' key)
             session_state: Current session state
             context: Additional context (optional)
             
         Returns:
             OrchestratorDecision with routing and action recommendations
         """
+        # Handle both string and dict input
+        if isinstance(user_message, dict):
+            message_text = user_message.get("message", str(user_message))
+            self.logger.info(f"OpenAI API Request - User message: {message_text}")
+            self.logger.info(f"OpenAI API Request - Full input: {user_message}")
+        else:
+            message_text = str(user_message)
+            self.logger.info(f"OpenAI API Request - User message: {message_text}")
+            
         start_time = datetime.now()
         
         try:
             # Check cache first
-            cache_key = self._get_cache_key(user_message, session_state)
+            cache_key = self._get_cache_key(message_text, session_state)
             cached_decision = self._get_cached_decision(cache_key)
             if cached_decision:
                 self.metrics["cache_hits"] += 1
@@ -88,6 +136,7 @@ class LLMDecisionService:
                 cached_decision.processing_time_ms = int(
                     (datetime.now() - start_time).total_seconds() * 1000
                 )
+                self.logger.info(f"OpenAI API Response - Using cached decision: {cached_decision.action}")
                 return cached_decision
             
             self.metrics["cache_misses"] += 1
@@ -96,7 +145,7 @@ class LLMDecisionService:
             llm_context = self._build_llm_context(session_state, context)
             
             # Get decision from LLM
-            decision = await self._call_llm_decision(user_message, llm_context)
+            decision = await self._call_llm_decision(message_text, llm_context, session_state)
             
             # Validate decision
             validated_decision = self._validate_decision(decision, session_state)
@@ -121,6 +170,8 @@ class LLMDecisionService:
                 f"processing_time: {validated_decision.processing_time_ms}ms)"
             )
             
+            # Decision result is already captured in the OpenAI API call logging above
+            
             return validated_decision
             
         except Exception as e:
@@ -130,9 +181,24 @@ class LLMDecisionService:
     
     def _get_cache_key(self, user_message: str, session_state: SessionState) -> str:
         """Generate cache key for decision caching."""
+        # Ensure message_text is a string
+        message_text = ""
+        
+        # Handle both string and dict input for cache key
+        if isinstance(user_message, dict):
+            # Extract message from dict safely
+            message_text = user_message.get("message", "")
+            if not isinstance(message_text, str):
+                message_text = str(message_text) if message_text else ""
+        elif isinstance(user_message, str):
+            message_text = user_message
+        else:
+            # Convert any other type to string
+            message_text = str(user_message)
+            
         # Create a normalized context for caching
         context_parts = [
-            user_message.lower().strip(),
+            message_text.lower().strip(),
             str(session_state.current_phase),
             str(len(session_state.conversation_history)),
             "has_active_task" if session_state.active_task else "no_active_task"
@@ -253,11 +319,15 @@ class LLMDecisionService:
     async def _call_llm_decision(
         self, 
         user_message: str, 
-        context: Dict[str, Any]
+        context: Dict[str, Any],
+        session_state: Optional[SessionState] = None
     ) -> OrchestratorDecision:
         """Call LLM for decision making."""
         if not self.llm_client:
-            return self._get_fallback_decision(user_message, None)
+            raise Exception("LLM client not initialized - cannot make decision")
+        
+        # Track timing
+        start_time = datetime.now()
         
         # Get system prompt
         system_prompt = self.system_prompt
@@ -265,32 +335,71 @@ class LLMDecisionService:
         # Build user prompt
         user_prompt = self._build_user_prompt(user_message, context)
         
-        # Call LLM with structured output
-        response = await self.llm_client.generate(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "orchestrator_decision",
-                    "schema": OrchestratorDecision.model_json_schema()
-                }
-            },
+        # Build prompt for existing LLM client interface
+        full_prompt = f"""SYSTEM: {system_prompt}
+
+USER: {user_prompt}
+
+Please respond with a JSON object following this schema:
+{OrchestratorDecision.model_json_schema()}
+
+Response:"""
+
+        # Prepare request data for logging
+        request_data = {
+            "system_prompt": system_prompt[:200] + "...",
+            "user_prompt": user_prompt,
+            "temperature": 0.3,
+            "max_tokens": 800,
+            "full_prompt": full_prompt[:500] + "..."
+        }
+        
+        # Log request
+        self.logger.info(f"OpenAI API Request - System prompt: {system_prompt[:200]}...")
+        self.logger.info(f"OpenAI API Request - User prompt: {user_prompt[:300]}...")
+        self.logger.info(f"OpenAI API Request - Temperature: 0.3, Max tokens: 800")
+        
+        # Call LLM
+        response = await self.llm_client.generate_text(
+            prompt=full_prompt,
             temperature=0.3,
-            max_tokens=800,
-            timeout=15  # 15 second timeout
+            max_tokens=800
+        )
+        
+        # Extract content from LLMResponse object
+        response_text = response.content if hasattr(response, 'content') else str(response)
+        
+        # Prepare response data for logging
+        response_data = {
+            "content": response_text,
+            "response_length": len(response_text),
+            "processing_time_ms": int((datetime.now() - start_time).total_seconds() * 1000)
+        }
+        
+        # Log response
+        self.logger.info(f"OpenAI API Response - Full response: {response_text}")
+        self.logger.info(f"OpenAI API Response - Response length: {len(response_text)} characters")
+        
+        # Log to file
+        self._log_llm_interaction(
+            interaction_type="openai_api_call",
+            request_data=request_data,
+            response_data=response_data,
+            session_id=getattr(session_state, 'session_id', None)
         )
         
         # Parse and validate response
         try:
+            self.logger.info(f"Raw LLM response: {response_text[:200]}...")
+            
             # Clean response - remove markdown backticks if present
-            cleaned_response = self._clean_json_response(response)
+            cleaned_response = self._clean_json_response(response_text)
+            self.logger.info(f"Cleaned JSON response: {cleaned_response[:200]}...")
             decision = OrchestratorDecision.model_validate_json(cleaned_response)
             return decision
         except Exception as e:
             self.logger.error(f"Invalid LLM response format: {e}")
+            self.logger.error(f"Response content was: {response_text if 'response_text' in locals() else 'No response text'}")
             return self._get_fallback_decision(user_message, None)
     
     def _build_user_prompt(

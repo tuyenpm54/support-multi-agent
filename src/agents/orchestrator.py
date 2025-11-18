@@ -57,8 +57,7 @@ class OrchestratorAgent(BaseAgent):
         self.state_transitions = {
             AgentPhase.CLASSIFY: {
                 "success": self._determine_next_after_classification,
-                "failure": self._handle_classification_failure,
-                "retry": self._retry_classification
+                "failure": self._handle_classification_failure
             },
             AgentPhase.REQUIRED_INFO: {
                 "success": AgentPhase.VALIDATE,
@@ -166,7 +165,7 @@ class OrchestratorAgent(BaseAgent):
             # Preprocessing step: Analyze user input and determine best action
             if "user_input" in kwargs:
                 orchestrator_decision = await self._preprocess_user_input(
-                    session_state, kwargs["user_input"], **kwargs
+                    session_state, kwargs["user_input"], **{k: v for k, v in kwargs.items() if k != 'user_input'}
                 )
                 
                 # Handle immediate response cases
@@ -908,8 +907,8 @@ class OrchestratorAgent(BaseAgent):
                 
         except Exception as e:
             self.logger.error(f"LLM decision execution failed: {str(e)}")
-            # Fall back to coordination-based execution
-            return await self._execute_fallback(session_state, **kwargs)
+            # Let the error propagate as per user request - no fallback decisions
+            raise
     
     async def _llm_create_new_task(
         self,
@@ -932,7 +931,7 @@ class OrchestratorAgent(BaseAgent):
             status=TaskStatus.IN_PROGRESS,
             current_phase=SessionPhase.CLASSIFY if task_type == TaskType.ERROR_RESOLUTION else SessionPhase.REQUIRED_INFO,
             current_agent=decision.target_agent or self._get_initial_agent(task_type),
-            last_user_message=kwargs.get("user_input", ""),
+            last_user_message=kwargs.get("user_input", {}).get("message", ""),
             priority=decision.priority,
             decisions=[decision],
             created_at=datetime.now(),
@@ -1049,7 +1048,7 @@ class OrchestratorAgent(BaseAgent):
             status=TaskStatus.IN_PROGRESS,
             current_phase=SessionPhase.CLASSIFY if task_type == TaskType.ERROR_RESOLUTION else SessionPhase.REQUIRED_INFO,
             current_agent=decision.target_agent or self._get_initial_agent(task_type),
-            last_user_message=kwargs.get("user_input", ""),
+            last_user_message=kwargs.get("user_input", {}).get("message", ""),
             priority=decision.priority,
             decisions=[decision],
             created_at=datetime.now(),

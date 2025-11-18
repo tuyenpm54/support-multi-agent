@@ -58,6 +58,7 @@ This document tracks all tasks for the Multi-Agent Customer Support System imple
 | ✅ | **Conversation endpoints** | API endpoints for conversation handling | `src/api/routers/conversations.py` | 2025-01-11 |
 | ✅ | **Agent endpoints** | Endpoints for agent status and metrics | `src/api/routers/agents.py` | 2025-01-11 |
 | ✅ | **WebSocket support** | Real-time communication for conversations | `src/api/app.py:websocket_endpoint()` | 2025-01-11 |
+| ✅ | **Chat API endpoint** | Create REST endpoint to receive user input and return orchestrator decisions | `src/api/routers/chat.py` | 2025-01-17 |
 
 ### Database & Infrastructure
 | Task | Status | Description | Files | Completion Date |
@@ -264,8 +265,8 @@ This document tracks all tasks for the Multi-Agent Customer Support System imple
 ## Task Progress Summary
 
 ### Phase 1: Foundation & Framework
-- **Total Tasks**: 24
-- **Completed**: 24 (100%)
+- **Total Tasks**: 25
+- **Completed**: 25 (100%)
 - **In Progress**: 0 (0%)
 - **Planned**: 0 (0%)
 - **Status**: ✅ COMPLETED

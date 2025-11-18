@@ -1,0 +1,1779 @@
+# ==========================================
+# PROBLEM DECOMPOSITION SYSTEM
+# Domain: Cost Price Analysis & Troubleshooting
+# Version: 1.0
+# ==========================================
+
+metadata:
+  version: "1.0"
+  domain: "cost_price_troubleshooting"
+  language: "vi"
+  created_date: "2024-10-30"
+  description: "Problem decomposition framework for diagnosing cost price issues"
+
+# ==========================================
+# LEVEL 1: ROOT PROBLEM DEFINITION
+# ==========================================
+
+root_problem:
+  id: "ROOT_PROBLEM"
+  name: "Giá thành không chính xác"
+  description: "Vấn đề gốc về tính toán giá thành sai hoặc không có"
+  
+  symptoms:
+    - symptom: "Không có giá"
+      percentage: 65
+      severity: "high"
+      
+    - symptom: "Giá bị sai"
+      percentage: 35
+      severity: "medium"
+  
+  main_branches:
+    - PROBLEM_A
+    - PROBLEM_B
+
+# ==========================================
+# LEVEL 2: MAIN PROBLEM BRANCHES
+# ==========================================
+
+main_problems:
+  
+  PROBLEM_A:
+    id: "PROBLEM_A"
+    name: "Không hiển thị giá thành trên báo cáo"
+    description: "Báo cáo không có giá thành hoặc giá thành = 0"
+    percentage: 65
+    keywords: ["không có giá", "không hiển thị", "giá = 0", "blank"]
+    
+    sub_problems:
+      - SUB_PROBLEM_A1
+      - SUB_PROBLEM_A2
+      - SUB_PROBLEM_A3
+  
+  PROBLEM_B:
+    id: "PROBLEM_B"
+    name: "Có giá nhưng giá trị không đúng"
+    description: "Giá thành hiển thị nhưng giá trị bị sai lệch"
+    percentage: 35
+    keywords: ["giá sai", "giá lệch", "giá cao/thấp bất thường"]
+    
+    sub_problems:
+      - SUB_PROBLEM_B1
+      - SUB_PROBLEM_B2
+      - SUB_PROBLEM_B3
+
+# ==========================================
+# LEVEL 3: SUB-PROBLEMS
+# ==========================================
+
+sub_problems:
+  
+  # --- Branch A Sub-Problems ---
+  
+  SUB_PROBLEM_A1:
+    id: "SUB_PROBLEM_A1"
+    name: "Cấu hình hệ thống sai"
+    parent: "PROBLEM_A"
+    percentage: 25
+    description: "Kho hoặc sản phẩm bị loại trừ khỏi tính giá"
+    
+    atomic_problems:
+      - AP_CONFIG_01
+  
+  SUB_PROBLEM_A2:
+    id: "SUB_PROBLEM_A2"
+    name: "Chưa có dữ liệu tính giá"
+    parent: "PROBLEM_A"
+    percentage: 40
+    description: "Thiếu công thức hoặc công thức không hợp lệ"
+    
+    atomic_problems:
+      - AP_FORMULA_01
+      - AP_FORMULA_02
+      - AP_FORMULA_03
+  
+  SUB_PROBLEM_A3:
+    id: "SUB_PROBLEM_A3"
+    name: "Dữ liệu chưa được xử lý"
+    parent: "PROBLEM_A"
+    percentage: 35
+    description: "Không có phát sinh hoặc chưa đồng bộ"
+    
+    atomic_problems:
+      - AP_DATA_01
+      - AP_DATA_02
+  
+  # --- Branch B Sub-Problems ---
+  
+  SUB_PROBLEM_B1:
+    id: "SUB_PROBLEM_B1"
+    name: "Cấu hình hệ thống sai"
+    parent: "PROBLEM_B"
+    percentage: 15
+    description: "Tương tự A1 nhưng ảnh hưởng đến giá trị"
+    
+    atomic_problems:
+      - AP_CONFIG_01
+  
+  SUB_PROBLEM_B2:
+    id: "SUB_PROBLEM_B2"
+    name: "Công thức tính toán sai"
+    parent: "PROBLEM_B"
+    percentage: 45
+    description: "Công thức có vấn đề về ngày, định lượng, hoặc chưa tính lại"
+    
+    atomic_problems:
+      - AP_FORMULA_02
+      - AP_FORMULA_04
+      - AP_FORMULA_05
+      - AP_FORMULA_06
+  
+  SUB_PROBLEM_B3:
+    id: "SUB_PROBLEM_B3"
+    name: "Dữ liệu nguồn sai"
+    parent: "PROBLEM_B"
+    percentage: 40
+    description: "Dữ liệu đầu vào có vấn đề về chất lượng"
+    
+    atomic_problems:
+      - AP_DATA_03
+      - AP_DATA_04
+      - AP_DATA_05
+
+# ==========================================
+# LEVEL 4: ATOMIC PROBLEMS CATALOG
+# ==========================================
+
+atomic_problems:
+  
+  # ======== CONFIGURATION ISSUES ========
+  
+  AP_CONFIG_01:
+    id: "AP_CONFIG_01"
+    code: "warehouse_blacklisted"
+    name: "Kho bị đưa vào blacklist"
+    category: "configuration"
+    
+    description: "Kho đang bị loại trừ khỏi tính giá thành trong cấu hình hệ thống"
+    
+    check_method:
+      type: "api_call"
+      api: "check_warehouse_in_blacklist"
+      params:
+        - warehouse_code
+      expected_result: "blacklist_status"
+    
+    required_fields:
+      - warehouse_code
+    
+    detection_logic:
+      keywords: ["kho", "blacklist", "loại trừ", "không được phép"]
+      condition: "blacklist_status == true"
+      confidence: 0.98
+    
+    solution:
+      solution_id: "SOLUTION_CONFIG_01"
+      can_auto_fix: false
+      requires_admin: true
+    
+    metadata:
+      frequency: "rare"
+      impact: "high"
+      fix_time_estimate: "5 minutes"
+  
+  # ======== FORMULA ISSUES ========
+  
+  AP_FORMULA_01:
+    id: "AP_FORMULA_01"
+    code: "no_formula"
+    name: "Chưa có công thức định lượng"
+    category: "formula"
+    
+    description: "Món ăn chưa được thiết lập công thức nguyên liệu"
+    
+    check_method:
+      type: "api_call"
+      api: "get_formula"
+      params:
+        - dish_code
+        - warehouse_code
+        - period
+      expected_result: "formula_data"
+    
+    required_fields:
+      - dish_code
+      - warehouse_code
+      - period
+    
+    detection_logic:
+      keywords: ["không hiển thị", "không có giá", "không hiện", "giá = 0", "blank", "chưa có công thức"]
+      condition: "formula_data is null or empty"
+      confidence: 0.95
+    
+    solution:
+      solution_id: "SOLUTION_FORMULA_01"
+      can_auto_fix: false
+      requires_user_input: true
+    
+    dependencies: []
+    
+    metadata:
+      frequency: "very_common"
+      impact: "critical"
+      fix_time_estimate: "10-15 minutes"
+  
+  AP_FORMULA_02:
+    id: "AP_FORMULA_02"
+    code: "formula_date_invalid"
+    name: "Ngày áp dụng/tạo công thức không hợp lệ"
+    category: "formula"
+    
+    description: "Ngày áp dụng công thức sau ngày kỳ báo cáo hoặc ngày tạo công thức không hợp lý"
+    
+    check_method:
+      type: "api_call"
+      api: "get_formula"
+      params:
+        - dish_code
+        - warehouse_code
+        - period
+      expected_result: "formula_data"
+    
+    required_fields:
+      - dish_code
+      - warehouse_code
+      - period
+    
+    detection_logic:
+      conditions:
+        - "formula_data.apply_date > report_period.end_date"
+        - "formula_data.created_date > report_period.end_date"
+      operator: "OR"
+      confidence: 0.92
+    
+    solution:
+      solution_id: "SOLUTION_FORMULA_02"
+      can_auto_fix: false
+      requires_user_input: true
+    
+    dependencies:
+      - AP_FORMULA_01  # Phải có công thức trước
+    
+    metadata:
+      frequency: "common"
+      impact: "high"
+      fix_time_estimate: "5 minutes"
+  
+  AP_FORMULA_03:
+    id: "AP_FORMULA_03"
+    code: "formula_incorrect"
+    name: "Định lượng công thức không chuẩn"
+    category: "formula"
+    
+    description: "Tỷ lệ nguyên liệu trong công thức bị sai hoặc không hợp lý"
+    
+    check_method:
+      type: "human_validation"
+      api: "get_formula"
+      params:
+        - dish_code
+        - warehouse_code
+      display_format: "formatted_formula"
+    
+    detection_logic:
+      condition: "requires_user_confirmation"
+      confidence: 0.85
+    
+    solution:
+      solution_id: "SOLUTION_FORMULA_03"
+      can_auto_fix: false
+      requires_user_input: true
+    
+    dependencies:
+      - AP_FORMULA_01
+    
+    metadata:
+      frequency: "medium"
+      impact: "high"
+      fix_time_estimate: "15-20 minutes"
+  
+  AP_FORMULA_04:
+    id: "AP_FORMULA_04"
+    code: "formula_modified_not_recalculated"
+    name: "Công thức vừa sửa nhưng chưa tính lại"
+    category: "formula"
+    
+    description: "Công thức đã được chỉnh sửa nhưng giá thành chưa được tính toán lại"
+    
+    check_method:
+      type: "api_call"
+      api: "get_formula_modification_history"
+      params:
+        - dish_code
+        - warehouse_code
+        - report_period
+      expected_result: "modification_history"
+    
+    detection_logic:
+      conditions:
+        - "modification_history.last_modified > cost_calculation.last_calculated"
+        - "modification_history.last_modified within report_period"
+      operator: "AND"
+      confidence: 0.94
+    
+    solution:
+      solution_id: "SOLUTION_FORMULA_04"
+      can_auto_fix: true
+    
+    dependencies:
+      - AP_FORMULA_01
+      - AP_FORMULA_02
+    
+    metadata:
+      frequency: "common"
+      impact: "medium"
+      fix_time_estimate: "2 minutes"
+  
+  AP_FORMULA_05:
+    id: "AP_FORMULA_05"
+    code: "ingredient_quantity_anomaly"
+    name: "Định lượng nguyên liệu bất thường"
+    category: "formula"
+    
+    description: "Số lượng nguyên liệu trong công thức quá cao hoặc quá thấp so với chuẩn"
+    
+    check_method:
+      type: "calculation"
+      api: "analyze_formula_quantities"
+      params:
+        - dish_code
+        - warehouse_code
+      expected_result: "quantity_analysis"
+    
+    detection_logic:
+      condition: "quantity_analysis.has_anomaly == true"
+      confidence: 0.78
+    
+    solution:
+      solution_id: "SOLUTION_FORMULA_05"
+      can_auto_fix: false
+      requires_user_input: true
+    
+    metadata:
+      frequency: "rare"
+      impact: "medium"
+      fix_time_estimate: "10 minutes"
+  
+  AP_FORMULA_06:
+    id: "AP_FORMULA_06"
+    code: "multiple_active_formulas"
+    name: "Có nhiều công thức đang active"
+    category: "formula"
+    
+    description: "Một món có nhiều hơn 1 công thức active trong cùng thời điểm"
+    
+    check_method:
+      type: "api_call"
+      api: "get_active_formulas"
+      params:
+        - dish_code
+        - warehouse_code
+        - date
+      expected_result: "active_formulas_list"
+    
+    detection_logic:
+      condition: "len(active_formulas_list) > 1"
+      confidence: 0.90
+    
+    solution:
+      solution_id: "SOLUTION_FORMULA_06"
+      can_auto_fix: false
+      requires_admin: true
+    
+    metadata:
+      frequency: "rare"
+      impact: "high"
+      fix_time_estimate: "5 minutes"
+  
+  # ======== DATA SYNC ISSUES ========
+  
+  AP_DATA_01:
+    id: "AP_DATA_01"
+    code: "no_sales_transaction"
+    name: "Không có phát sinh bán hàng"
+    category: "data_sync"
+    
+    description: "Trong kỳ báo cáo không có giao dịch bán hàng nào"
+    
+    check_method:
+      type: "api_call"
+      api: "check_sales_transactions"
+      params:
+        - dish_code
+        - warehouse_code
+        - start_date
+        - end_date
+      expected_result: "transaction_count"
+    
+    detection_logic:
+      condition: "transaction_count == 0"
+      confidence: 1.0
+    
+    solution:
+      solution_id: null
+      can_auto_fix: false
+      is_terminal: true
+    
+    metadata:
+      frequency: "uncommon"
+      impact: "informational"
+      fix_time_estimate: "N/A"
+  
+  AP_DATA_02:
+    id: "AP_DATA_02"
+    code: "pos_not_synced"
+    name: "Dữ liệu POS chưa đồng bộ về IVT"
+    category: "data_sync"
+    
+    description: "Dữ liệu bán hàng từ POS chưa được đồng bộ về hệ thống kho"
+    
+    check_method:
+      type: "api_call"
+      api: "check_pos_sync_status"
+      params:
+        - warehouse_code
+        - date
+      expected_result: "sync_status"
+    
+    detection_logic:
+      condition: "sync_status.synced == false"
+      confidence: 0.96
+    
+    solution:
+      solution_id: "SOLUTION_DATA_02"
+      can_auto_fix: true
+    
+    dependencies:
+      - AP_DATA_01
+    
+    metadata:
+      frequency: "common"
+      impact: "high"
+      fix_time_estimate: "5-10 minutes"
+  
+  # ======== DATA QUALITY ISSUES ========
+  
+  AP_DATA_03:
+    id: "AP_DATA_03"
+    code: "pending_receipts"
+    name: "Có chứng từ treo chưa nhập kho"
+    category: "data_quality"
+    
+    description: "Có phiếu nhập kho đang ở trạng thái chờ hoặc chưa hoàn thành"
+    
+    check_method:
+      type: "api_call"
+      api: "check_pending_receipts"
+      params:
+        - warehouse_code
+        - ingredient_codes
+        - date_range
+      expected_result: "pending_receipts_list"
+    
+    detection_logic:
+      condition: "len(pending_receipts_list) > 0"
+      confidence: 0.91
+    
+    solution:
+      solution_id: "SOLUTION_DATA_03"
+      can_auto_fix: false
+      requires_user_input: true
+    
+    metadata:
+      frequency: "medium"
+      impact: "medium"
+      fix_time_estimate: "10-30 minutes"
+  
+  AP_DATA_04:
+    id: "AP_DATA_04"
+    code: "outlier_purchase_price"
+    name: "Giá nhập bất thường"
+    category: "data_quality"
+    
+    description: "Có giá nhập nguyên liệu bất thường (cao hoặc thấp hơn nhiều so với trung bình)"
+    
+    check_method:
+      type: "calculation"
+      api: "analyze_purchase_prices"
+      params:
+        - ingredient_codes
+        - warehouse_code
+        - date_range
+      expected_result: "price_analysis"
+    
+    detection_logic:
+      conditions:
+        - "price_analysis.has_outliers == true"
+        - "price_analysis.outlier_deviation > 30%"
+      operator: "AND"
+      confidence: 0.70
+    
+    solution:
+      solution_id: null
+      can_auto_fix: false
+      requires_user_confirmation: true
+    
+    metadata:
+      frequency: "uncommon"
+      impact: "medium"
+      fix_time_estimate: "Depends on investigation"
+  
+  AP_DATA_05:
+    id: "AP_DATA_05"
+    code: "beginning_balance_incorrect"
+    name: "Giá trị đầu kỳ không chính xác"
+    category: "data_quality"
+    
+    description: "Giá trị tồn kho đầu kỳ bị sai, ảnh hưởng đến tính giá thành"
+    
+    check_method:
+      type: "calculation"
+      api: "validate_beginning_balance"
+      params:
+        - warehouse_code
+        - ingredient_codes
+        - period
+      expected_result: "validation_result"
+    
+    detection_logic:
+      condition: "validation_result.is_valid == false"
+      confidence: 0.88
+    
+    solution:
+      solution_id: "SOLUTION_DATA_05"
+      can_auto_fix: false
+      requires_admin: true
+    
+    dependencies:
+      - AP_DATA_03
+    
+    metadata:
+      frequency: "rare"
+      impact: "high"
+      fix_time_estimate: "30-60 minutes"
+
+# ==========================================
+# SOLUTIONS CATALOG
+# ==========================================
+
+solutions:
+  
+  SOLUTION_CONFIG_01:
+    id: "SOLUTION_CONFIG_01"
+    name: "Remove kho khỏi blacklist"
+    atomic_problem: "AP_CONFIG_01"
+    
+    steps:
+      - step: 1
+        action: "Vào Cài đặt > Quản lý kho"
+        
+      - step: 2
+        action: "Tìm kho {warehouse_name}"
+        
+      - step: 3
+        action: "Bỏ check 'Loại trừ khỏi tính giá thành'"
+        
+      - step: 4
+        action: "Lưu và chạy lại tính giá"
+    
+    verification:
+      api: "check_warehouse_in_blacklist"
+      expected: "blacklist_status == false"
+    
+    rollback_possible: true
+    
+  SOLUTION_FORMULA_01:
+    id: "SOLUTION_FORMULA_01"
+    name: "Tạo công thức định lượng mới"
+    atomic_problem: "AP_FORMULA_01"
+    
+    steps:
+      - step: 1
+        action: "Vào Danh mục > Công thức món ăn"
+        
+      - step: 2
+        action: "Chọn món {dish_name}"
+        
+      - step: 3
+        action: "Nhấn 'Thêm công thức'"
+        
+      - step: 4
+        action: "Chọn nguyên liệu và nhập định lượng"
+        details: "Lưu ý: Định lượng là số lượng nguyên liệu cần cho 1 đơn vị món"
+        
+      - step: 5
+        action: "Chọn ngày áp dụng phù hợp"
+        warning: "Ngày áp dụng phải <= ngày đầu kỳ báo cáo"
+        
+      - step: 6
+        action: "Lưu công thức và chạy lại tính giá"
+    
+    verification:
+      api: "get_formula"
+      expected: "formula_data is not null"
+    
+    estimated_time: "10-15 minutes"
+    
+  SOLUTION_FORMULA_02:
+    id: "SOLUTION_FORMULA_02"
+    name: "Điều chỉnh ngày áp dụng công thức"
+    atomic_problem: "AP_FORMULA_02"
+    
+    steps:
+      - step: 1
+        action: "Vào Danh mục > Công thức món ăn"
+        
+      - step: 2
+        action: "Tìm công thức của món {dish_name}"
+        
+      - step: 3
+        action: "Sửa ngày áp dụng"
+        instruction: "Ngày áp dụng phải <= {report_start_date}"
+        
+      - step: 4
+        action: "Lưu và chạy lại tính giá"
+    
+    verification:
+      api: "get_formula"
+      expected: "formula_data.apply_date <= report_period.start_date"
+    
+    estimated_time: "5 minutes"
+    
+  SOLUTION_FORMULA_03:
+    id: "SOLUTION_FORMULA_03"
+    name: "Sửa định lượng công thức"
+    atomic_problem: "AP_FORMULA_03"
+    
+    steps:
+      - step: 1
+        action: "Vào Danh mục > Công thức món ăn"
+        
+      - step: 2
+        action: "Mở công thức cần sửa"
+        
+      - step: 3
+        action: "Kiểm tra và điều chỉnh định lượng các nguyên liệu"
+        
+      - step: 4
+        action: "Lưu lại"
+        
+      - step: 5
+        action: "Chạy lại tính giá thành"
+    
+    verification:
+      api: "get_formula"
+      requires_manual_check: true
+    
+    estimated_time: "15-20 minutes"
+    
+  SOLUTION_FORMULA_04:
+    id: "SOLUTION_FORMULA_04"
+    name: "Tính lại giá thành sau khi sửa công thức"
+    atomic_problem: "AP_FORMULA_04"
+    
+    steps:
+      - step: 1
+        action: "Vào Báo cáo > Giá thành món ăn"
+        
+      - step: 2
+        action: "Chọn kho và kỳ báo cáo"
+        
+      - step: 3
+        action: "Nhấn 'Tính lại giá thành'"
+        
+      - step: 4
+        action: "Chờ hệ thống xử lý (1-2 phút)"
+    
+    can_auto_execute: true
+    auto_api: "recalculate_cost_price"
+    
+    verification:
+      api: "get_cost_calculation_history"
+      expected: "last_calculated > formula_last_modified"
+    
+    estimated_time: "2 minutes"
+    
+  SOLUTION_FORMULA_05:
+    id: "SOLUTION_FORMULA_05"
+    name: "Kiểm tra và điều chỉnh định lượng bất thường"
+    atomic_problem: "AP_FORMULA_05"
+    
+    steps:
+      - step: 1
+        action: "Xem lại định lượng đang báo bất thường"
+        display: "anomaly_details"
+        
+      - step: 2
+        action: "Kiểm tra với công thức chuẩn hoặc bếp trưởng"
+        
+      - step: 3
+        action: "Nếu sai, sửa lại công thức"
+        reference: "SOLUTION_FORMULA_03"
+        
+      - step: 4
+        action: "Nếu đúng, xác nhận để ghi nhận"
+    
+    estimated_time: "10 minutes"
+    
+  SOLUTION_FORMULA_06:
+    id: "SOLUTION_FORMULA_06"
+    name: "Vô hiệu hóa công thức trùng"
+    atomic_problem: "AP_FORMULA_06"
+    
+    steps:
+      - step: 1
+        action: "Xác định công thức nào là đúng"
+        
+      - step: 2
+        action: "Vô hiệu hóa các công thức còn lại"
+        
+      - step: 3
+        action: "Chạy lại tính giá"
+    
+    requires_admin: true
+    estimated_time: "5 minutes"
+    
+  SOLUTION_DATA_02:
+    id: "SOLUTION_DATA_02"
+    name: "Đồng bộ dữ liệu POS"
+    atomic_problem: "AP_DATA_02"
+    
+    steps:
+      - step: 1
+        action: "Vào Hệ thống > Đồng bộ dữ liệu"
+        
+      - step: 2
+        action: "Chọn kho cần đồng bộ"
+        
+      - step: 3
+        action: "Chọn ngày cần đồng bộ"
+        
+      - step: 4
+        action: "Nhấn 'Đồng bộ ngay'"
+        
+      - step: 5
+        action: "Chờ hoàn tất (5-10 phút)"
+        
+      - step: 6
+        action: "Chạy lại tính giá thành"
+    
+    can_auto_execute: true
+    auto_api: "sync_pos_data"
+    
+    verification:
+      api: "check_pos_sync_status"
+      expected: "sync_status.synced == true"
+    
+    estimated_time: "5-10 minutes"
+    
+  SOLUTION_DATA_03:
+    id: "SOLUTION_DATA_03"
+    name: "Hoàn thành phiếu nhập kho treo"
+    atomic_problem: "AP_DATA_03"
+    
+    steps:
+      - step: 1
+        action: "Xem danh sách phiếu treo"
+        display: "pending_receipts_list"
+        
+      - step: 2
+        action: "Mở từng phiếu và hoàn tất thông tin"
+        details: "Điền đầy đủ giá, số lượng, nhà cung cấp"
+        
+      - step: 3
+        action: "Duyệt phiếu"
+        
+      - step: 4
+        action: "Sau khi hoàn tất tất cả, chạy lại tính giá"
+    
+    verification:
+      api: "check_pending_receipts"
+      expected: "len(pending_receipts_list) == 0"
+    
+    estimated_time: "10-30 minutes"
+    
+  SOLUTION_DATA_05:
+    id: "SOLUTION_DATA_05"
+    name: "Tính lại giá vốn kỳ trước"
+    atomic_problem: "AP_DATA_05"
+    
+    steps:
+      - step: 1
+        action: "Liên hệ Admin hoặc kế toán trưởng"
+        
+      - step: 2
+        action: "Yêu cầu tính lại giá thành cho kỳ trước"
+        reason: "Để có giá trị đầu kỳ chính xác"
+        
+      - step: 3
+        action: "Sau khi kỳ trước hoàn tất, tính lại kỳ hiện tại"
+    
+    requires_admin: true
+    estimated_time: "30-60 minutes"
+    cascade_effect: true
+
+# ==========================================
+# DECOMPOSITION STRATEGIES
+# ==========================================
+
+decomposition_strategies:
+  
+  strategy_elimination:
+    id: "strategy_elimination"
+    name: "Top-Down Elimination"
+    description: "Kiểm tra các vấn đề phổ biến trước, loại trừ dần từ trên xuống"
+    
+    use_when:
+      - "User báo lỗi không cụ thể"
+      - "Chưa có thông tin về nguyên nhân"
+    
+    levels:
+      - level: 1
+        name: "System Configuration"
+        priority: "critical"
+        atomic_problems:
+          - AP_CONFIG_01
+        action_if_found: "Giải quyết ngay, không cần check tiếp"
+        
+      - level: 2
+        name: "Data Availability"
+        priority: "high"
+        atomic_problems:
+          - AP_FORMULA_01
+          - AP_DATA_01
+        action_if_found: "Root cause, giải quyết trước"
+        
+      - level: 3
+        name: "Data Validity"
+        priority: "high"
+        atomic_problems:
+          - AP_FORMULA_02
+          - AP_DATA_02
+        action_if_found: "Sửa dữ liệu không hợp lệ"
+        
+      - level: 4
+        name: "Calculation Logic"
+        priority: "medium"
+        atomic_problems:
+          - AP_FORMULA_03
+          - AP_FORMULA_04
+          - AP_FORMULA_05
+        requires_user_input: true
+        
+      - level: 5
+        name: "Data Quality"
+        priority: "medium"
+        atomic_problems:
+          - AP_DATA_03
+          - AP_DATA_04
+          - AP_DATA_05
+        requires_deep_analysis: true
+  
+  strategy_dependency:
+    id: "strategy_dependency"
+    name: "Dependency-Based Resolution"
+    description: "Giải quyết theo thứ tự phụ thuộc, solve dependencies trước"
+    
+    use_when:
+      - "Đã xác định được vấn đề cụ thể"
+      - "Vấn đề có dependency chain"
+    
+    dependency_graph:
+      AP_FORMULA_02:
+        depends_on:
+          - AP_FORMULA_01
+        reason: "Phải có công thức mới check được ngày áp dụng"
+        
+      AP_FORMULA_03:
+        depends_on:
+          - AP_FORMULA_01
+        reason: "Phải có công thức mới check được định lượng"
+        
+      AP_FORMULA_04:
+        depends_on:
+          - AP_FORMULA_01
+          - AP_FORMULA_02
+        reason: "Phải có công thức hợp lệ mới check modification"
+        
+      AP_FORMULA_05:
+        depends_on:
+          - AP_FORMULA_01
+        reason: "Phải có công thức mới phân tích anomaly"
+        
+      AP_DATA_02:
+        depends_on:
+          - AP_DATA_01
+        reason: "Phải có phát sinh bán hàng mới cần đồng bộ"
+        
+      AP_DATA_05:
+        depends_on:
+          - AP_DATA_03
+        reason: "Phải hoàn thành phiếu treo trước mới tính đầu kỳ chính xác"
+  
+  strategy_probability:
+    id: "strategy_probability"
+    name: "Probability-Based Checking"
+    description: "Ưu tiên check vấn đề phổ biến nhất trước"
+    
+    use_when:
+      - "Cần optimize số lượng API calls"
+      - "User muốn giải quyết nhanh"
+    
+    probability_ranking:
+      - atomic_problem: "AP_FORMULA_01"
+        probability: 0.60
+        reason: "60% cases thiếu công thức"
+        
+      - atomic_problem: "AP_DATA_02"
+        probability: 0.40
+        reason: "40% cases chưa đồng bộ"
+        
+      - atomic_problem: "AP_FORMULA_02"
+        probability: 0.40
+        reason: "40% cases ngày không hợp lệ"
+        
+      - atomic_problem: "AP_FORMULA_04"
+        probability: 0.35
+        reason: "35% cases sửa công thức chưa tính lại"
+        
+      - atomic_problem: "AP_CONFIG_01"
+        probability: 0.25
+        reason: "25% cases config sai"
+        
+      - atomic_problem: "AP_DATA_03"
+        probability: 0.20
+        reason: "20% cases có phiếu treo"
+        
+      - atomic_problem: "AP_FORMULA_03"
+        probability: 0.15
+        reason: "15% cases định lượng sai"
+        
+      - atomic_problem: "AP_DATA_04"
+        probability: 0.10
+        reason: "10% cases giá nhập bất thường"
+        
+      - atomic_problem: "AP_DATA_05"
+        probability: 0.08
+        reason: "8% cases đầu kỳ sai"
+        
+      - atomic_problem: "AP_FORMULA_05"
+        probability: 0.05
+        reason: "5% cases định lượng bất thường"
+        
+      - atomic_problem: "AP_FORMULA_06"
+        probability: 0.03
+        reason: "3% cases trùng công thức"
+  
+  strategy_hybrid:
+    id: "strategy_hybrid"
+    name: "Hybrid Approach"
+    description: "Kết hợp các strategy dựa trên context"
+    
+    decision_tree:
+      - condition: "symptoms indicate PROBLEM_A"
+        use_strategy: "strategy_probability"
+        focus_on:
+          - AP_FORMULA_01
+          - AP_DATA_01
+          - AP_DATA_02
+        
+      - condition: "symptoms indicate PROBLEM_B"
+        use_strategy: "strategy_elimination"
+        start_from_level: 3
+        
+      - condition: "multiple problems detected"
+        use_strategy: "strategy_dependency"
+        reason: "Cần giải quyết theo đúng thứ tự"
+        
+      - condition: "user is expert"
+        use_strategy: "strategy_probability"
+        skip_obvious_checks: true
+        
+      - condition: "user is beginner"
+        use_strategy: "strategy_elimination"
+        explain_each_step: true
+
+# ==========================================
+# CONVERSATION PATTERNS
+# ==========================================
+
+conversation_patterns:
+  
+  pattern_simple_sequential:
+    id: "pattern_simple_sequential"
+    name: "Giải quyết tuần tự đơn giản"
+    
+    trigger:
+      user_input_contains:
+        - "không có giá"
+        - "không hiển thị"
+        - "giá = 0"
+    
+    flow:
+      step_1:
+        agent_action: "Identify root problem"
+        result: "PROBLEM_A"
+        
+      step_2:
+        agent_action: "Decompose to sub-problems"
+        result:
+          - "SUB_PROBLEM_A1"
+          - "SUB_PROBLEM_A2"
+          - "SUB_PROBLEM_A3"
+        
+      step_3:
+        agent_action: "Check atomic problems in order"
+        strategy: "strategy_probability"
+        
+        check_sequence:
+          check_1:
+            atomic_problem: "AP_CONFIG_01"
+            api_call: "check_warehouse_in_blacklist"
+            if_positive: "STOP and provide SOLUTION_CONFIG_01"
+            if_negative: "Continue to check_2"
+            
+          check_2:
+            atomic_problem: "AP_FORMULA_01"
+            api_call: "get_formula"
+            if_positive: "STOP and provide SOLUTION_FORMULA_01"
+            if_negative: "Continue to check_3"
+            
+          check_3:
+            atomic_problem: "AP_DATA_01"
+            api_call: "check_sales_transactions"
+            if_positive: "TERMINAL STATE - inform user"
+            if_negative: "Continue to check_4"
+            
+          check_4:
+            atomic_problem: "AP_DATA_02"
+            api_call: "check_pos_sync_status"
+            if_positive: "STOP and provide SOLUTION_DATA_02"
+            if_negative: "Escalate to advanced troubleshooting"
+      
+      step_4:
+        agent_action: "Provide solution"
+        include:
+          - solution_steps
+          - estimated_time
+          - follow_up_instruction
+    
+    response_template: |
+      Tôi đã tìm ra vấn đề! {PROBLEM_NAME}
+      
+      **Nguyên nhân:** {ATOMIC_PROBLEM_DESCRIPTION}
+      
+      **Cách giải quyết:**
+      {SOLUTION_STEPS}
+      
+      ⏱️ Thời gian ước tính: {ESTIMATED_TIME}
+      
+      Sau khi hoàn thành, hãy báo tôi để kiểm tra nhé!
+  
+  pattern_complex_incremental:
+    id: "pattern_complex_incremental"
+    name: "Giải quyết từng bước với user confirmation"
+    
+    trigger:
+      user_input_contains:
+        - "giá sai"
+        - "giá lệch"
+        - "giá cao/thấp bất thường"
+    
+    flow:
+      step_1:
+        agent_action: "Identify PROBLEM_B"
+        agent_response: |
+          Để kiểm tra tại sao giá bị sai, tôi cần xác minh vài điểm.
+          Tôi sẽ check từng bước nhé!
+        
+      step_2:
+        agent_action: "Check config first"
+        atomic_problem: "AP_CONFIG_01"
+        if_found:
+          provide_solution: true
+          stop: true
+        if_not_found:
+          continue: true
+        
+      step_3:
+        agent_action: "Check formula dates"
+        atomic_problem: "AP_FORMULA_02"
+        if_found:
+          provide_solution: true
+          stop: true
+        if_not_found:
+          continue: true
+        
+      step_4:
+        agent_action: "Need user validation for formula"
+        atomic_problem: "AP_FORMULA_03"
+        agent_response: |
+          Tôi cần bạn kiểm tra công thức. Đây là công thức hiện tại:
+          
+          {FORMULA_DISPLAY}
+          
+          Bạn có thấy bất thường gì không? (Nguyên liệu, tỷ lệ...)
+        
+        user_confirms_ok:
+          continue: true
+          
+        user_finds_issue:
+          provide_solution: "SOLUTION_FORMULA_03"
+          stop: true
+        
+      step_5:
+        agent_action: "Check if recently modified"
+        atomic_problem: "AP_FORMULA_04"
+        if_found:
+          provide_solution: true
+          stop: true
+        if_not_found:
+          continue: true
+        
+      step_6:
+        agent_action: "Analyze purchase prices"
+        atomic_problem: "AP_DATA_04"
+        if_outliers_found:
+          agent_response: |
+            Tôi phát hiện có giá nhập bất thường:
+            
+            {OUTLIER_DETAILS}
+            
+            Đây có phải là giá nhập đúng không?
+          
+          user_confirms_correct:
+            mark_as_verified: true
+            continue: true
+            
+          user_confirms_incorrect:
+            provide_guidance: "Cần sửa phiếu nhập kho"
+            stop: true
+        
+      step_7:
+        agent_action: "Check beginning balance"
+        atomic_problem: "AP_DATA_05"
+        if_found:
+          provide_solution: true
+          requires_admin: true
+  
+  pattern_multiple_issues:
+    id: "pattern_multiple_issues"
+    name: "Xử lý nhiều vấn đề cùng lúc"
+    
+    trigger:
+      condition: "Detected more than 1 atomic problem"
+    
+    flow:
+      step_1:
+        agent_action: "List all detected problems"
+        agent_response: |
+          Tôi phát hiện ra {COUNT} vấn đề:
+          
+          {PROBLEMS_LIST}
+          
+          Mình sẽ xử lý từng vấn đề theo thứ tự ưu tiên nhé!
+        
+      step_2:
+        agent_action: "Sort problems by dependency and priority"
+        use_strategy: "strategy_dependency"
+        
+      step_3:
+        agent_action: "Solve problems sequentially"
+        for_each_problem:
+          provide_solution: true
+          wait_for_completion: true
+          verify_fix: true
+          then_move_to_next: true
+        
+      step_4:
+        agent_action: "Final verification"
+        agent_response: |
+          Tất cả vấn đề đã được giải quyết! 🎉
+          
+          Hãy chạy lại báo cáo để xem kết quả nhé!
+  
+  pattern_clarification_needed:
+    id: "pattern_clarification_needed"
+    name: "Cần làm rõ thông tin"
+    
+    trigger:
+      condition: "Missing required information"
+    
+    missing_info_handlers:
+      missing_dish:
+        agent_question: "Bạn đang gặp vấn đề với món nào?"
+        extract_from_response: "dish_name"
+        
+      missing_warehouse:
+        agent_question: "Vấn đề này xảy ra ở kho nào?"
+        extract_from_response: "warehouse_code"
+        
+      missing_period:
+        agent_question: "Lỗi này xảy ra ở kỳ báo cáo nào? (VD: 04/2024)"
+        extract_from_response: "report_period"
+        
+      ambiguous_symptom:
+        agent_question: |
+          Để tôi hiểu rõ hơn, vấn đề là:
+          1. Hoàn toàn không có giá
+          2. Có giá nhưng giá trị sai
+          
+          Trường hợp nào đúng với bạn?
+        extract_from_response: "problem_type"
+  
+  pattern_terminal_state:
+    id: "pattern_terminal_state"
+    name: "Trạng thái kết thúc (không có solution)"
+    
+    scenarios:
+      no_sales_transaction:
+        atomic_problem: "AP_DATA_01"
+        agent_response: |
+          Sau khi kiểm tra, tôi thấy rằng trong kỳ báo cáo không có 
+          phát sinh bán hàng nào cho món {DISH_NAME}.
+          
+          Do đó việc không có giá thành là bình thường.
+          
+          💡 Giá thành chỉ được tính khi có phát sinh bán hàng.
+        
+        follow_up_suggestion: |
+          Nếu bạn chắc chắn có bán hàng nhưng không hiển thị, 
+          có thể dữ liệu POS chưa đồng bộ. Bạn có muốn tôi kiểm tra không?
+
+# ==========================================
+# LEARNING FRAMEWORK
+# ==========================================
+
+learning_framework:
+  
+  case_logging:
+    enabled: true
+    log_structure:
+      - case_id
+      - timestamp
+      - user_input
+      - entities_extracted
+      - root_problem
+      - decomposition_path
+      - atomic_problems_checked
+      - atomic_problems_found
+      - solutions_provided
+      - user_feedback
+      - resolution_status
+      - resolution_time
+  
+  pattern_learning:
+    
+    simple_patterns:
+      pattern_1:
+        symptom_keywords:
+          - "không có giá"
+          - "không hiển thị"
+        high_probability_causes:
+          - AP_FORMULA_01: 0.60
+          - AP_DATA_02: 0.30
+          - AP_CONFIG_01: 0.10
+        learned_from_cases: 150
+        confidence: 0.92
+        
+      pattern_2:
+        symptom_keywords:
+          - "giá = 0"
+        same_as: "pattern_1"
+        
+      pattern_3:
+        symptom_keywords:
+          - "giá sai"
+          - "giá lệch"
+        high_probability_causes:
+          - AP_FORMULA_04: 0.35
+          - AP_FORMULA_02: 0.30
+          - AP_DATA_04: 0.20
+          - AP_DATA_03: 0.15
+        learned_from_cases: 80
+        confidence: 0.85
+    
+    compound_patterns:
+      pattern_compound_1:
+        conditions:
+          - "PROBLEM_A symptoms"
+          - "AP_CONFIG_01 = false"
+          - "AP_FORMULA_01 = false"
+        then_high_probability:
+          - AP_DATA_02: 0.75
+        learned_insight: "Nếu loại trừ được config và formula, rất cao là data sync"
+        
+      pattern_compound_2:
+        conditions:
+          - "PROBLEM_B symptoms"
+          - "AP_FORMULA_02 = false"
+          - "user confirms formula is correct"
+        then_check_next:
+          - AP_DATA_04: 0.60
+          - AP_DATA_03: 0.30
+        learned_insight: "Nếu formula OK, thường là data quality issue"
+  
+  meta_learning:
+    
+    learned_strategies:
+      strategy_1:
+        insight: "Elimination strategy hiệu quả nhất cho PROBLEM_A"
+        success_rate: 0.88
+        avg_resolution_time: "8 minutes"
+        
+      strategy_2:
+        insight: "Probability strategy tốt cho user có kinh nghiệm"
+        success_rate: 0.82
+        avg_resolution_time: "5 minutes"
+        
+      strategy_3:
+        insight: "Dependency strategy cần thiết khi có multiple issues"
+        success_rate: 0.95
+        avg_resolution_time: "15 minutes"
+    
+    user_behavior_patterns:
+      beginner_users:
+        characteristics:
+          - "Ask vague questions"
+          - "Need more explanation"
+          - "Follow instructions slowly"
+        best_approach:
+          strategy: "strategy_elimination"
+          explain_each_step: true
+          provide_screenshots: true
+        
+      expert_users:
+        characteristics:
+          - "Provide specific details"
+          - "Understand technical terms"
+          - "Can self-diagnose partially"
+        best_approach:
+          strategy: "strategy_probability"
+          skip_basic_checks: true
+          provide_advanced_insights: true
+    
+    common_false_positives:
+      false_positive_1:
+        atomic_problem: "AP_FORMULA_03"
+        reason: "User says formula is correct but actually has subtle error"
+        mitigation: "Always show calculated cost and ask if it seems reasonable"
+        
+      false_positive_2:
+        atomic_problem: "AP_DATA_04"
+        reason: "Outlier is actually a legitimate special purchase"
+        mitigation: "Show historical price chart for context"
+  
+  continuous_improvement:
+    
+    feedback_loop:
+      - step: "Collect user feedback after each resolution"
+      - step: "Analyze successful vs failed resolutions"
+      - step: "Identify patterns in failures"
+      - step: "Adjust probability scores"
+      - step: "Update decomposition strategies"
+      - step: "Retrain NLU models with new patterns"
+    
+    metrics_to_track:
+      - first_time_resolution_rate
+      - average_resolution_time
+      - number_of_api_calls_per_case
+      - user_satisfaction_score
+      - false_positive_rate
+      - false_negative_rate
+      - escalation_rate
+
+# ==========================================
+# AGENT STATE MANAGEMENT
+# ==========================================
+
+state_management:
+  
+  conversation_state:
+    fields:
+      - conversation_id
+      - user_id
+      - current_problem_id
+      - problems_checked: []
+      - problems_found: []
+      - solutions_attempted: []
+      - user_confirmations: {}
+      - pending_actions: []
+      - conversation_history: []
+      - context:
+          dish_name: null
+          dish_code: null
+          warehouse_code: null
+          warehouse_name: null
+          report_period: null
+          report_start_date: null
+          report_end_date: null
+  
+  problem_solving_state:
+    fields:
+      - current_strategy: null
+      - current_level: 0
+      - checked_count: 0
+      - found_count: 0
+      - resolution_status: "in_progress"
+      - confidence_score: 0.0
+      - next_action: null
+  
+  state_transitions:
+    - from: "initial"
+      to: "gathering_info"
+      trigger: "User reports problem"
+      
+    - from: "gathering_info"
+      to: "diagnosing"
+      trigger: "All required info collected"
+      
+    - from: "diagnosing"
+      to: "solution_found"
+      trigger: "Atomic problem confirmed"
+      
+    - from: "diagnosing"
+      to: "need_clarification"
+      trigger: "Uncertain or need user input"
+      
+    - from: "need_clarification"
+      to: "diagnosing"
+      trigger: "User provides clarification"
+      
+    - from: "solution_found"
+      to: "providing_solution"
+      trigger: "Solution selected"
+      
+    - from: "providing_solution"
+      to: "awaiting_user_action"
+      trigger: "Instructions provided"
+      
+    - from: "awaiting_user_action"
+      to: "verifying"
+      trigger: "User reports completion"
+      
+    - from: "verifying"
+      to: "resolved"
+      trigger: "Verification successful"
+      
+    - from: "verifying"
+      to: "diagnosing"
+      trigger: "Problem persists"
+      
+    - from: "diagnosing"
+      to: "escalation_needed"
+      trigger: "Cannot resolve with available tools"
+
+# ==========================================
+# API SPECIFICATIONS
+# ==========================================
+
+api_specifications:
+  
+  check_warehouse_in_blacklist:
+    endpoint: "/api/v1/config/warehouse/blacklist/check"
+    method: "GET"
+    params:
+      warehouse_code:
+        type: "string"
+        required: true
+    response:
+      blacklist_status:
+        type: "boolean"
+      reason:
+        type: "string"
+        nullable: true
+  
+  get_formula:
+    endpoint: "/api/v1/formula/get"
+    method: "GET"
+    params:
+      dish_code:
+        type: "string"
+        required: true
+      warehouse_code:
+        type: "string"
+        required: true
+      date:
+        type: "date"
+        required: false
+    response:
+      formula_data:
+        type: "object"
+        nullable: true
+        fields:
+          - formula_id
+          - dish_code
+          - dish_name
+          - warehouse_code
+          - ingredients: []
+          - apply_date
+          - created_date
+          - modified_date
+          - is_active
+  
+  check_sales_transactions:
+    endpoint: "/api/v1/sales/transactions/check"
+    method: "GET"
+    params:
+      dish_code:
+        type: "string"
+        required: true
+      warehouse_code:
+        type: "string"
+        required: true
+      start_date:
+        type: "date"
+        required: true
+      end_date:
+        type: "date"
+        required: true
+    response:
+      transaction_count:
+        type: "integer"
+      total_quantity:
+        type: "float"
+      total_amount:
+        type: "float"
+  
+  check_pos_sync_status:
+    endpoint: "/api/v1/sync/pos/status"
+    method: "GET"
+    params:
+      warehouse_code:
+        type: "string"
+        required: true
+      date:
+        type: "date"
+        required: true
+    response:
+      synced:
+        type: "boolean"
+      last_sync_time:
+        type: "datetime"
+      pending_count:
+        type: "integer"
+  
+  get_formula_modification_history:
+    endpoint: "/api/v1/formula/history"
+    method: "GET"
+    params:
+      dish_code:
+        type: "string"
+        required: true
+      warehouse_code:
+        type: "string"
+        required: true
+      start_date:
+        type: "date"
+        required: false
+      end_date:
+        type: "date"
+        required: false
+    response:
+      modification_history:
+        type: "array"
+        items:
+          - modified_date
+          - modified_by
+          - changes: []
+  
+  check_pending_receipts:
+    endpoint: "/api/v1/inventory/receipts/pending"
+    method: "GET"
+    params:
+      warehouse_code:
+        type: "string"
+        required: true
+      ingredient_codes:
+        type: "array"
+        required: false
+      date_range:
+        type: "object"
+        required: false
+    response:
+      pending_receipts_list:
+        type: "array"
+        items:
+          - receipt_id
+          - receipt_date
+          - supplier
+          - ingredients: []
+          - status
+  
+  analyze_purchase_prices:
+    endpoint: "/api/v1/inventory/prices/analyze"
+    method: "POST"
+    params:
+      ingredient_codes:
+        type: "array"
+        required: true
+      warehouse_code:
+        type: "string"
+        required: true
+      date_range:
+        type: "object"
+        required: true
+    response:
+      price_analysis:
+        type: "object"
+        fields:
+          - has_outliers: boolean
+          - outliers: []
+          - statistics: {}
+  
+  recalculate_cost_price:
+    endpoint: "/api/v1/cost/recalculate"
+    method: "POST"
+    params:
+      warehouse_code:
+        type: "string"
+        required: true
+      dish_codes:
+        type: "array"
+        required: false
+      period:
+        type: "object"
+        required: true
+    response:
+      job_id:
+        type: "string"
+      status:
+        type: "string"
+      estimated_time:
+        type: "integer"
+
+# ==========================================
+# PERFORMANCE METRICS
+# ==========================================
+
+performance_targets:
+  
+  resolution_metrics:
+    first_time_resolution_rate:
+      target: 0.85
+      current: null
+      
+    average_resolution_time:
+      target: "10 minutes"
+      current: null
+      
+    user_satisfaction:
+      target: 4.5
+      scale: "1-5"
+      current: null
+  
+  efficiency_metrics:
+    average_api_calls_per_case:
+      target: 3.5
+      current: null
+      
+    average_user_clarifications:
+      target: 1.5
+      current: null
+      
+    false_positive_rate:
+      target: 0.05
+      current: null
+  
+  quality_metrics:
+    diagnostic_accuracy:
+      target: 0.90
+      current: null
+      
+    solution_success_rate:
+      target: 0.92
+      current: null
+
+# ==========================================
+# EXAMPLES & TEST CASES
+# ==========================================
+
+test_cases:
+  
+  case_1_simple:
+    name: "Không có giá - thiếu công thức"
+    user_input: "Món cá kho không có giá tháng 4"
+    
+    expected_flow:
+      - extract_entities:
+          dish_name: "cá kho"
+          period: "04/2024"
+      - clarify: "warehouse_code"
+      - identify_root: "PROBLEM_A"
+      - check: "AP_CONFIG_01: false"
+      - check: "AP_FORMULA_01: true"
+      - provide_solution: "SOLUTION_FORMULA_01"
+    
+    expected_api_calls: 2
+    expected_resolution_time: "10 minutes"
+  
+  case_2_moderate:
+    name: "Giá sai - công thức sửa chưa tính lại"
+    user_input: "Giá gà xào sả ớt bị sai, em vừa sửa công thức hôm qua"
+    
+    expected_flow:
+      - extract_entities:
+          dish_name: "gà xào sả ớt"
+          context: "công thức vừa sửa"
+      - identify_root: "PROBLEM_B"
+      - hypothesis: "AP_FORMULA_04"
+      - check: "AP_FORMULA_04"
+        result: true
+      - provide_solution: "SOLUTION_FORMULA_04"
+    
+    expected_api_calls: 1
+    expected_resolution_time: "2 minutes"
+  
+  case_3_complex:
+    name: "Multiple issues - cả công thức lẫn data"
+    user_input: "Giá bún bò không đúng"
+    
+    expected_flow:
+      - identify_root: "PROBLEM_B"
+      - check: "AP_CONFIG_01"
+        result: false
+      - check: "AP_FORMULA_02"
+        result: true
+      - check: "AP_DATA_02"
+        result: true
+      - action: prioritize_by_dependency
+      - solve: "AP_FORMULA_02"
+        order: first
+      - solve: "AP_DATA_02"
+        order: second
+    
+    expected_api_calls: 4
+    expected_resolution_time: "15 minutes"
+  
+  case_4_terminal:
+    name: "Terminal state - không có bán hàng"
+    user_input: "Tại sao món canh chua không có giá?"
+    
+    expected_flow:
+      - identify_root: "PROBLEM_A"
+      - check: "AP_CONFIG_01"
+        result: false
+      - check: "AP_FORMULA_01"
+        result: false
+      - check: "AP_DATA_01"
+        result: true
+      - terminal_state: true
+      - explain: "Không có phát sinh bán hàng"
+    
+    expected_api_calls: 3
+    expected_resolution_time: "N/A"
+
+# ==========================================
+# END OF FILE
+# ==========================================

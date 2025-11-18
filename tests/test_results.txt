@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/Users/tuyenpham712/Work/support-multi-agent/tests/test_orchestrator_conversation_flow.py", line 28, in <module>
+    from src.services.llm_decision import LLMDecisionService
+  File "/Users/tuyenpham712/Work/support-multi-agent/src/services/llm_decision.py", line 17, in <module>
+    from src.models.session import (
+    ...<2 lines>...
+    )
+  File "/Users/tuyenpham712/Work/support-multi-agent/src/models/session.py", line 1, in <module>
+    from pydantic import BaseModel, Field
+ModuleNotFoundError: No module named 'pydantic'
