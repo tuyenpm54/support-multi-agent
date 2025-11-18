@@ -8,7 +8,9 @@
       "Bash(curl:*)",
       "Bash(pip install:*)",
       "Bash(pip3 install:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []

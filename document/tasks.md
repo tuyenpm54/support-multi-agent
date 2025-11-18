@@ -134,40 +134,124 @@ This document tracks all tasks for the Multi-Agent Customer Support System imple
 | ✅ | **Diagnostic question generation** | Create system to generate relevant diagnostic questions | 2 days | Classification | 2025-01-11 |
 | ✅ | **Enhanced multi-turn preprocessing** | Intelligent LLM-powered preprocessing with conversation context and intent evolution tracking | 2 days | LLM integration | 2025-01-12 |
 | ✅ | **Streamlined preprocessing prompt** | Optimized LLM prompt for 80% reduction in token usage while maintaining functionality | 0.5 days | Enhanced preprocessing | 2025-01-12 |
-| 📋 | **Knowledge base population** | Load and index known issues with embeddings | 1 day | Embedding generation |
-| 📋 | **Agent implementation** | Complete classifier agent with full workflow | 1 day | All above |
-| 📋 | **Testing and validation** | Comprehensive testing with sample issues | 1 day | Agent implementation |
+| ✅ | **Knowledge base population** | Load and index known issues with embeddings | 1 day | Embedding generation | 2025-01-18 |
+| ✅ | **Population script implementation** | Create comprehensive knowledge base population with sample Vietnamese F&B issues | 0.5 day | Sample data | 2025-01-18 |
+| ✅ | **Orchestrator Phase 2 update** | Update orchestrator with new 3-agent workflow (Classifier → InfoValidation → Fix) | 1 day | Architecture design | 2025-01-18 |
+| ✅ | **InfoValidation agent creation** | Create unified InfoValidation agent combining RequiredInfo + Validation functionality | 1 day | Phase 2 design | 2025-01-18 |
+| ✅ | **Phase 2 workflow validation** | Test and validate Phase 2 architecture and state transitions | 0.5 day | All components | 2025-01-18 |
 
-### 2.2 RequiredInfo Agent 📋 PLANNED
+### 2.2 InfoValidation Agent 📋 PLANNED
+**Objective**: Gather missing information and perform validation in a unified workflow
+
+**Implementation Tasks**:
+
+#### 2.2.1 Information Gathering Module
 | Task | Status | Description | Estimated Time | Dependencies |
 |------|--------|-------------|----------------|--------------|
-| 📋 | **Conversation flow engine** | Implement multi-turn conversation management | 2 days | Base agent framework |
-| 📋 | **Question generation system** | Generate contextual diagnostic questions | 2 days | Classifier agent |
+| 📋 | **Question generation system** | Generate contextual diagnostic questions based on issue symptoms | 2 days | Classifier agent |
+| 📋 | **Conversation flow engine** | Implement multi-turn conversation management with context-aware sequencing | 2 days | Question generation |
 | 📋 | **Information extraction** | Extract structured data from user responses | 2 days | LLM integration |
 | 📋 | **Completeness validation** | Validate if all required information is collected | 1 day | Information extraction |
-| 📋 | **Agent implementation** | Complete required info agent with dialogue management | 2 days | All above |
-| 📋 | **Testing and validation** | Test with various conversation scenarios | 1 day | Agent implementation |
 
-### 2.3 Validation Agent 📋 PLANNED
+#### 2.2.2 Validation Engine
 | Task | Status | Description | Estimated Time | Dependencies |
 |------|--------|-------------|----------------|--------------|
-| 📋 | **Tool registry implementation** | Create tool registry with execution capabilities | 2 days | Database schema |
-| 📋 | **Diagnostic tool integration** | Implement system health check and diagnostic tools | 2 days | Tool registry |
-| 📋 | **Root cause analysis** | Build automated root cause identification system | 3 days | Diagnostic tools |
-| 📋 | **Verification engine** | Create multi-tool validation workflow | 2 days | Root cause analysis |
-| 📋 | **Rollback token system** | Implement safe rollback capability for failed validations | 1 day | Tool execution |
-| 📋 | **Agent implementation** | Complete validation agent with tool orchestration | 2 days | All above |
-| 📋 | **Testing and validation** | Test with various issue scenarios and tool combinations | 1 day | Agent implementation |
+| 📋 | **Diagnostic tool execution** | Implement automated diagnostic tool execution with parallel processing | 2 days | Tool framework |
+| 📋 | **System health checks** | Integrate system health check capabilities | 1 day | Tool execution |
+| 📋 | **Root cause analysis** | Build automated root cause identification with confidence scoring | 2 days | Health checks |
+| 📋 | **Result aggregation** | Aggregate and analyze validation results | 1 day | Root cause analysis |
+
+#### 2.2.3 Tool Integration Framework
+| Task | Status | Description | Estimated Time | Dependencies |
+|------|--------|-------------|----------------|--------------|
+| 📋 | **Tool registry implementation** | Create comprehensive tool registry with execution capabilities | 2 days | Database schema |
+| 📋 | **API integrations** | Integrate with external systems and APIs | 2 days | Tool registry |
+| 📋 | **Secure execution environment** | Implement sandboxed tool execution | 2 days | API integrations |
+
+#### 2.2.4 Agent Integration & Testing
+| Task | Status | Description | Estimated Time | Dependencies |
+|------|--------|-------------|----------------|--------------|
+| 📋 | **Agent implementation** | Complete InfoValidation agent with unified workflow | 2 days | All above |
+| 📋 | **Testing and validation** | Test with various conversation and validation scenarios | 2 days | Agent implementation |
+
+**Success Criteria**:
+- Complete information gathering + validation in ≤4 total turns
+- 95% validation accuracy on confirmed issues
+- <30 seconds combined information + validation time
+- Support for 10+ diagnostic tools
+- Natural, non-repetitive conversation flow
+
+### 2.3 Tool Management & Infrastructure 📋 PLANNED
+**Objective**: Build comprehensive tool ecosystem for diagnostic and fix operations
+
+#### 2.3.1 Diagnostic Tool Library
+| Task | Status | Description | Estimated Time | Dependencies |
+|------|--------|-------------|----------------|--------------|
+| 📋 | **Standard tool interfaces** | Implement standard tool interfaces and protocols | 2 days | Tool registry |
+| 📋 | **Tool health monitoring** | Add tool health monitoring and circuit breaking | 2 days | Tool interfaces |
+| 📋 | **Performance metrics collection** | Implement comprehensive tool performance metrics | 1 day | Health monitoring |
+| 📋 | **Tool version management** | Add tool version management and compatibility | 1 day | Performance metrics |
+
+#### 2.3.2 Tool Execution Engine
+| Task | Status | Description | Estimated Time | Dependencies |
+|------|--------|-------------|----------------|--------------|
+| 📋 | **Parallel execution support** | Implement parallel tool execution capabilities | 2 days | Tool library |
+| 📋 | **Timeout and retry logic** | Add timeout handling and retry mechanisms | 1 day | Parallel execution |
+| 📋 | **Resource management** | Implement resource management and rate limiting | 2 days | Timeout logic |
+| 📋 | **Security sandboxing** | Create secure sandboxed execution environment | 2 days | Resource management |
+
+#### 2.3.3 Tool Registry System
+| Task | Status | Description | Estimated Time | Dependencies |
+|------|--------|-------------|----------------|--------------|
+| 📋 | **Centralized tool configuration** | Implement centralized tool configuration management | 1 day | Database schema |
+| 📋 | **Dynamic tool discovery** | Add dynamic tool discovery and registration | 2 days | Tool configuration |
+| 📋 | **Tool dependency management** | Implement tool dependency resolution | 1 day | Tool discovery |
+| 📋 | **Tool usage analytics** | Add comprehensive tool usage analytics | 1 day | Dependency management |
+
+**Success Criteria**:
+- 15+ pre-built diagnostic tools
+- <100ms average tool execution time
+- 99.9% tool reliability
+- Real-time tool health monitoring
 
 ### 2.4 Fix Agent 📋 PLANNED
+**Objective**: Automatically resolve confirmed issues with appropriate fixes
+
+#### 2.4.1 Resolution Engine
 | Task | Status | Description | Estimated Time | Dependencies |
 |------|--------|-------------|----------------|--------------|
-| 📋 | **Fix execution engine** | Create system to execute automated fixes based on issue type | 2 days | Validation agent |
-| 📋 | **External API integration** | Integrate with external systems (CRM, monitoring, etc.) | 2 days | API endpoints |
-| 📋 | **Success verification** | Implement fix success validation and rollback capabilities | 2 days | Fix execution |
-| 📋 | **Security sandbox** | Create secure execution environment for fix operations | 2 days | Fix execution |
+| 📋 | **Automated fix execution** | Create system to execute automated fixes based on issue type | 2 days | Tool management |
+| 📋 | **Multi-step resolution workflows** | Implement complex multi-step resolution workflows | 2 days | Fix execution |
+| 📋 | **Success verification** | Implement fix success validation and verification | 2 days | Resolution workflows |
+| 📋 | **Rollback capability** | Add rollback capability for failed fixes | 1 day | Success verification |
+
+#### 2.4.2 Tool Execution System
+| Task | Status | Description | Estimated Time | Dependencies |
+|------|--------|-------------|----------------|--------------|
+| 📋 | **Secure tool execution sandbox** | Create secure sandbox for fix operations | 2 days | Tool infrastructure |
+| 📋 | **Permission-based access control** | Implement permission-based access control | 2 days | Security sandbox |
+| 📋 | **Execution timeout and monitoring** | Add execution timeout and monitoring | 1 day | Access control |
+| 📋 | **Audit logging** | Implement comprehensive audit logging for compliance | 1 day | Timeout monitoring |
+
+#### 2.4.3 External System Integration
+| Task | Status | Description | Estimated Time | Dependencies |
+|------|--------|-------------|----------------|--------------|
+| 📋 | **CRM system integration** | Integrate with CRM for ticket creation and updates | 2 days | API framework |
+| 📋 | **Monitoring system APIs** | Integrate with monitoring system APIs for status checks | 2 days | CRM integration |
+| 📋 | **User management system** | Integrate with user management system | 1 day | Monitoring APIs |
+| 📋 | **Notification systems** | Implement notification systems for escalation | 1 day | User management |
+
+#### 2.4.4 Agent Integration & Testing
+| Task | Status | Description | Estimated Time | Dependencies |
+|------|--------|-------------|----------------|--------------|
 | 📋 | **Agent implementation** | Complete fix agent with resolution workflows | 2 days | All above |
-| 📋 | **Testing and validation** | Test with various fix scenarios and rollback procedures | 1 day | Agent implementation |
+| 📋 | **Testing and validation** | Test with various fix scenarios and rollback procedures | 2 days | Agent implementation |
+
+**Success Criteria**:
+- 75% automated fix success rate
+- <60 seconds fix execution time
+- Zero unauthorized system modifications
+- Complete audit trail for all actions
 
 ---
 
@@ -272,11 +356,11 @@ This document tracks all tasks for the Multi-Agent Customer Support System imple
 - **Status**: ✅ COMPLETED
 
 ### Phase 2: Core Agent Implementation  
-- **Total Tasks**: 46 (14 enhanced orchestrator + 32 original)
-- **Completed**: 14 (30%)
+- **Total Tasks**: 67 (14 enhanced orchestrator + clean architecture + 53 agent tasks)
+- **Completed**: 27 (40%)
 - **In Progress**: 0 (0%)
-- **Planned**: 32 (70%)
-- **Status**: 🚧 IN PROGRESS (Enhanced Orchestrator + Clean Architecture Complete)
+- **Planned**: 40 (60%)
+- **Status**: 🚧 IN PROGRESS (Enhanced Orchestrator + Phase 2 Architecture Implementation Complete)
 
 ### Phase 3: Advanced Features & Optimization
 - **Total Tasks**: 10
@@ -301,10 +385,11 @@ This document tracks all tasks for the Multi-Agent Customer Support System imple
 - **Database**: Schema implemented and ready ✅
 - **Next Milestone**: Complete Classifier Agent implementation (LLM integration ✅, Vector search ✅)
 
-### Upcoming Sprint (Week 3)
-1. **Classifier Agent**: LLM integration and semantic search
-2. **Knowledge Base**: Populate with known issues and embeddings
-3. **Testing Framework**: Expand for agent testing
-4. **Performance Monitoring**: Set up basic metrics collection
+### Upcoming Sprint (Week 3-4)
+1. **Classifier Agent**: Complete implementation with knowledge base population
+2. **InfoValidation Agent**: Information gathering and validation workflows
+3. **Tool Management**: Infrastructure and execution engine
+4. **Fix Agent**: Resolution workflows and external integrations
+5. **Integration Testing**: End-to-end agent coordination testing
 
 This task tracker provides a comprehensive view of project progress and upcoming work items, ensuring clear visibility into the implementation timeline and dependencies.

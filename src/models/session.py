@@ -6,8 +6,7 @@ from enum import Enum
 
 class AgentPhase(str, Enum):
     CLASSIFY = "CLASSIFY"
-    REQUIRED_INFO = "REQUIRED_INFO"
-    VALIDATE = "VALIDATE"
+    INFO_VALIDATION = "INFO_VALIDATION"
     FIX = "FIX"
     COMPLETE = "COMPLETE"
     ESCALATE = "ESCALATE"
@@ -49,19 +48,19 @@ class ClassificationResult(BaseModel):
     has_diagnostic_question: bool = Field(default=False)
 
 
-class RequiredInfoResult(BaseModel):
-    complete_info: Dict[str, Any] = Field(default_factory=dict)
-    info_status: str = "incomplete"  # incomplete, complete
-    turns_needed: int = 0
-    missing_fields: List[str] = Field(default_factory=list)
-
-
-class ValidationResult(BaseModel):
+class InfoValidationResult(BaseModel):
+    """Combined result from information gathering and validation"""
+    info_gathered: bool = False
+    gathered_fields: Dict[str, Any] = Field(default_factory=dict)
+    conversation_turns: int = 0
+    
+    # Validation results
     validation_result: str = "UNCERTAIN"  # CONFIRMED, NOT_FOUND, DIFFERENT_ISSUE, UNCERTAIN
-    confidence: float = 0.5
-    checks_performed: int = 0
+    validation_confidence: float = 0.5
+    ready_for_fix: bool = False
+    validation_checks_performed: int = 0
     detected_issue: Optional[str] = None
-    reason: Optional[str] = None
+    validation_reason: Optional[str] = None
     root_cause_confirmed: bool = False
     failed_checks: List[Dict[str, Any]] = Field(default_factory=list)
 
@@ -229,8 +228,7 @@ class SessionState(BaseModel):
     
     # Agent Results
     classification: Optional[ClassificationResult] = None
-    required_info: Optional[RequiredInfoResult] = None
-    validation: Optional[ValidationResult] = None
+    info_validation: Optional[InfoValidationResult] = None
     fix: Optional[FixResult] = None
     
     # Tasks (LLM-based orchestrator support)

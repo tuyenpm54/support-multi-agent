@@ -6,8 +6,8 @@ from enum import Enum
 
 from src.agents.base import BaseAgent
 from src.models.session import (
-    SessionState, AgentPhase, ClassificationResult, RequiredInfoResult,
-    ValidationResult, FixResult, TimelineEvent
+    SessionState, AgentPhase, ClassificationResult, InfoValidationResult,
+    FixResult, TimelineEvent
 )
 from src.core.state_manager import SessionManager
 from src.core.coordination import (
@@ -53,19 +53,19 @@ class OrchestratorAgent(BaseAgent):
         # Task management
         self.task_counter = 0
         
-        # State transition rules
+        # State transition rules - Updated for Phase 2 architecture
         self.state_transitions = {
             AgentPhase.CLASSIFY: {
-                "success": self._determine_next_after_classification,
+                "success": self._determine_next_after_classification_phase2,
                 "failure": self._handle_classification_failure
             },
-            AgentPhase.REQUIRED_INFO: {
-                "success": AgentPhase.VALIDATE,
-                "failure": self._handle_info_failure,
+            AgentPhase.REQUIRED_INFO: {  # Renamed from INFO_VALIDATION in plan.md
+                "success": self._determine_next_after_infovalidation,
+                "failure": self._handle_infovalidation_failure,
                 "retry": AgentPhase.REQUIRED_INFO
             },
             AgentPhase.VALIDATE: {
-                "success": self._determine_next_after_validation,
+                "success": AgentPhase.FIX,
                 "failure": self._handle_validation_failure,
                 "retry": AgentPhase.VALIDATE
             },
@@ -442,6 +442,98 @@ class OrchestratorAgent(BaseAgent):
         
         # Move directly to validation if we have enough info
         return AgentPhase.VALIDATE
+    
+    async def _determine_next_after_classification_phase2(
+        self,
+        session_state: SessionState,
+        agent_result: Dict[str, Any],
+        **kwargs
+    ) -> AgentPhase:
+        """
+        Determine next phase after classification for Phase 2 architecture.
+        
+        Updated logic based on plan.md:
+        - High confidence classification + sufficient info → InfoValidation agent
+        - Medium confidence or missing info → InfoValidation agent  
+        - Low confidence → Escalate
+        """
+        classification = session_state.classification
+        
+        if not classification:
+            self.logger.warning("No classification result found")
+            return AgentPhase.ESCALATE
+        
+        # Phase 2 logic: Use InfoValidation agent for information gathering and validation
+        if classification.confidence >= 0.6:
+            # Move to InfoValidation agent for unified info gathering and validation
+            self.logger.info(f"Classification confidence {classification.confidence:.2f} → InfoValidation agent")
+            return AgentPhase.REQUIRED_INFO
+        else:
+            # Too low confidence, escalate
+            self.logger.warning(f"Classification confidence too low: {classification.confidence:.2f} → Escalate")
+            return AgentPhase.ESCALATE
+    
+    async def _determine_next_after_infovalidation(
+        self,
+        session_state: SessionState,
+        agent_result: Dict[str, Any],
+        **kwargs
+    ) -> AgentPhase:
+        """
+        Determine next phase after InfoValidation agent.
+        
+        Based on Phase 2 plan.md: InfoValidation combines info gathering + validation
+        """
+        # Check if InfoValidation agent was successful
+        validation = session_state.validation
+        info_complete = agent_result.get('information_complete', False)
+        validation_confirmed = agent_result.get('validation_confirmed', False)
+        
+        if info_complete and validation_confirmed:
+            # Both info gathering and validation successful → Fix agent
+            self.logger.info("InfoValidation: Both info and validation complete → Fix agent")
+            return AgentPhase.FIX
+        elif info_complete and not validation_confirmed:
+            # Info gathered but validation failed → Retry validation or escalate
+            retry_count = agent_result.get('retry_count', 0)
+            if retry_count < self.max_retries[AgentPhase.VALIDATE]:
+                self.logger.info("InfoValidation: Info complete, validation failed → Retry validation")
+                return AgentPhase.VALIDATE
+            else:
+                self.logger.warning("InfoValidation: Validation retries exceeded → Escalate")
+                return AgentPhase.ESCALATE
+        elif not info_complete:
+            # Still need more information → Continue with InfoValidation
+            retry_count = agent_result.get('retry_count', 0)
+            if retry_count < self.max_retries[AgentPhase.REQUIRED_INFO]:
+                self.logger.info("InfoValidation: More information needed → Continue info gathering")
+                return AgentPhase.REQUIRED_INFO
+            else:
+                self.logger.warning("InfoValidation: Info gathering retries exceeded → Escalate")
+                return AgentPhase.ESCALATE
+        else:
+            # Default: escalate
+            self.logger.warning("InfoValidation: Unexpected state → Escalate")
+            return AgentPhase.ESCALATE
+    
+    async def _handle_infovalidation_failure(
+        self,
+        session_state: SessionState,
+        agent_result: Dict[str, Any],
+        **kwargs
+    ) -> AgentPhase:
+        """Handle InfoValidation agent failure with escalation or retry."""
+        error_type = agent_result.get('error_type', 'unknown')
+        retry_count = agent_result.get('retry_count', 0)
+        
+        self.logger.error(f"InfoValidation agent failed: {error_type} (retry {retry_count})")
+        
+        if retry_count >= self.max_retries[AgentPhase.REQUIRED_INFO]:
+            self.logger.error("InfoValidation agent max retries exceeded → Escalate")
+            return AgentPhase.ESCALATE
+        
+        # Try again with InfoValidation agent
+        return AgentPhase.REQUIRED_INFO
     
     async def _determine_next_after_validation(
         self,

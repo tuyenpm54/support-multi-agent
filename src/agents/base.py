@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
-from src.models.session import SessionState, ClassificationResult, RequiredInfoResult, ValidationResult, FixResult
+from src.models.session import SessionState, ClassificationResult, InfoValidationResult, FixResult
 
 
 class BaseAgent(ABC):
