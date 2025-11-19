@@ -7,6 +7,7 @@ from enum import Enum
 class AgentPhase(str, Enum):
     CLASSIFY = "CLASSIFY"
     INFO_VALIDATION = "INFO_VALIDATION"
+    RESOLUTION_LOOP = "RESOLUTION_LOOP"
     FIX = "FIX"
     COMPLETE = "COMPLETE"
     ESCALATE = "ESCALATE"
@@ -40,6 +41,9 @@ class ClassificationResult(BaseModel):
     potential_causes: List[Dict[str, Any]] = Field(default_factory=list)
     recommended_tools: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
+    
+    # Hierarchical resolution fields
+    issue_type: Optional[str] = None  # 'general' or 'detailed'
     
     # Legacy fields for backward compatibility
     matched_issue: Optional[Dict[str, Any]] = None
