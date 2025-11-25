@@ -54,16 +54,16 @@ class OrchestratorAgent(BaseAgent):
         # Task management
         self.task_counter = 0
         
-        # State transition rules - Updated for hierarchical resolution architecture
+        # State transition rules - Updated for new 3-agent architecture
         self.state_transitions = {
             AgentPhase.CLASSIFY: {
                 "success": self._determine_next_after_classification,
                 "failure": self._handle_classification_failure
             },
-            AgentPhase.RESOLUTION_LOOP: {
-                "success": self._determine_next_after_resolution_loop,
-                "failure": self._handle_resolution_loop_failure,
-                "retry": AgentPhase.RESOLUTION_LOOP
+            AgentPhase.INFO_VALIDATION: {
+                "success": AgentPhase.FIX,
+                "failure": self._handle_info_validation_failure,
+                "retry": AgentPhase.INFO_VALIDATION
             },
             AgentPhase.VALIDATE: {
                 "success": AgentPhase.COMPLETE,
@@ -80,9 +80,9 @@ class OrchestratorAgent(BaseAgent):
         # Maximum retry counts per phase
         self.max_retries = {
             AgentPhase.CLASSIFY: 3,
-            AgentPhase.RESOLUTION_LOOP: 5,  # Higher retries for complex hierarchical issues
+            AgentPhase.INFO_VALIDATION: 3,
             AgentPhase.VALIDATE: 3,
-            AgentPhase.FIX: 2
+            AgentPhase.FIX: 5  # Higher retries for complex fix operations
         }
     
     def set_dependencies(self, session_manager, tool_registry):
@@ -112,16 +112,35 @@ class OrchestratorAgent(BaseAgent):
         if not self.coordination_manager:
             return
         
-        # Rule: Route to resolution loop for hierarchical issues
+        # Rule: Route to info validation for general issues with missing information
         self.coordination_manager.add_coordination_rule(CoordinationRule(
             trigger_event=CoordinationEvent.AGENT_COMPLETE,
             source_phase=AgentPhase.CLASSIFY,
             condition=lambda data: (
                 data.get("classification", {}).get("classified", False) and
-                data.get("classification", {}).get("issue_type") in ["general", "detailed"]
+                data.get("classification", {}).get("issue_type") == "general" and
+                data.get("classification", {}).get("has_missing_info", False)
             ),
-            target_phase=AgentPhase.RESOLUTION_LOOP,
+            target_phase=AgentPhase.INFO_VALIDATION,
             priority=9
+        ))
+        
+        # Rule: Route directly to fix for detailed issues or complete general issues
+        self.coordination_manager.add_coordination_rule(CoordinationRule(
+            trigger_event=CoordinationEvent.AGENT_COMPLETE,
+            source_phase=AgentPhase.CLASSIFY,
+            condition=lambda data: (
+                data.get("classification", {}).get("classified", False) and
+                (
+                    data.get("classification", {}).get("issue_type") == "detailed" or
+                    (
+                        data.get("classification", {}).get("issue_type") == "general" and
+                        not data.get("classification", {}).get("has_missing_info", True)
+                    )
+                )
+            ),
+            target_phase=AgentPhase.FIX,
+            priority=8
         ))
         
         # Rule: Auto-retry on low confidence classification
@@ -136,7 +155,7 @@ class OrchestratorAgent(BaseAgent):
             priority=8
         ))
         
-        # Rule: Fast-track to validation for high confidence detailed issues
+        # Rule: Fast-track to fix for high confidence detailed issues
         self.coordination_manager.add_coordination_rule(CoordinationRule(
             trigger_event=CoordinationEvent.AGENT_COMPLETE,
             source_phase=AgentPhase.CLASSIFY,
@@ -145,7 +164,7 @@ class OrchestratorAgent(BaseAgent):
                 data.get("classification", {}).get("issue_type") == "detailed" and
                 not data.get("classification", {}).get("has_diagnostic_question", False)
             ),
-            target_phase=AgentPhase.VALIDATE,
+            target_phase=AgentPhase.FIX,
             priority=7
         ))
         
@@ -446,12 +465,11 @@ class OrchestratorAgent(BaseAgent):
         **kwargs
     ) -> AgentPhase:
         """
-        Determine next phase after classification for hierarchical resolution architecture.
+        Determine next phase after classification for new 3-agent architecture.
         
         Updated logic:
-        - If classification finds a general issue → ResolutionLoop agent (handles detailed children)
-        - If classification finds a detailed issue → ResolutionLoop agent (single issue resolution)
-        - High confidence detailed issue without diagnostic questions → Validation (optional)
+        - If classification finds a general issue with missing info → InfoValidation agent
+        - If classification finds a detailed issue or complete general issue → Fix agent
         - Low confidence → Escalate
         """
         classification = session_state.classification
@@ -462,10 +480,18 @@ class OrchestratorAgent(BaseAgent):
         
         # Route based on issue type and confidence
         if classification.confidence >= 0.6:
-            if classification.issue_type in ["general", "detailed"]:
-                # Route to resolution loop for hierarchical processing
-                self.logger.info(f"Classification: {classification.issue_type} issue (confidence: {classification.confidence:.2f}) → ResolutionLoop agent")
-                return AgentPhase.RESOLUTION_LOOP
+            if classification.issue_type == "general":
+                # Check if general issue needs information validation
+                if getattr(classification, 'has_missing_info', False):
+                    self.logger.info(f"Classification: {classification.issue_type} issue with missing info (confidence: {classification.confidence:.2f}) → InfoValidation agent")
+                    return AgentPhase.INFO_VALIDATION
+                else:
+                    self.logger.info(f"Classification: {classification.issue_type} issue (confidence: {classification.confidence:.2f}) → Fix agent")
+                    return AgentPhase.FIX
+            elif classification.issue_type == "detailed":
+                # Route directly to fix agent for detailed issues
+                self.logger.info(f"Classification: {classification.issue_type} issue (confidence: {classification.confidence:.2f}) → Fix agent")
+                return AgentPhase.FIX
             else:
                 # Unknown issue type, try validation
                 self.logger.warning(f"Unknown issue type: {classification.issue_type} → Validation")
@@ -475,74 +501,25 @@ class OrchestratorAgent(BaseAgent):
             self.logger.warning(f"Classification confidence too low: {classification.confidence:.2f} → Escalate")
             return AgentPhase.ESCALATE
     
-    async def _determine_next_after_resolution_loop(
+    async def _handle_info_validation_failure(
         self,
         session_state: SessionState,
         agent_result: Dict[str, Any],
         **kwargs
     ) -> AgentPhase:
-        """
-        Determine next phase after ResolutionLoop agent.
-        
-        The ResolutionLoop agent handles hierarchical issue resolution:
-        - If fully resolved → COMPLETE
-        - If partially resolved but needs more work → CONTINUE (stay in loop)
-        - If failed with specific error → ESCALATE
-        """
-        resolution_status = agent_result.get('resolution_status', ResolutionStatus.FAILED)
-        fully_resolved = agent_result.get('fully_resolved', False)
-        error_details = agent_result.get('error_details')
-        retry_count = agent_result.get('retry_count', 0)
-        
-        if fully_resolved:
-            # All issues resolved successfully
-            self.logger.info("ResolutionLoop: All issues resolved → COMPLETE")
-            return AgentPhase.COMPLETE
-        
-        elif resolution_status == ResolutionStatus.PARTIAL:
-            # Partial resolution, but user may want to continue
-            self.logger.info("ResolutionLoop: Partial resolution → Continue loop")
-            # Stay in resolution loop for user to decide on next steps
-            return AgentPhase.RESOLUTION_LOOP
-        
-        elif resolution_status == ResolutionStatus.FAILED and error_details:
-            # Check if we should retry based on error type
-            if retry_count < self.max_retries[AgentPhase.RESOLUTION_LOOP]:
-                self.logger.warning(f"ResolutionLoop: Failed but retryable ({error_details}) → Retry")
-                return AgentPhase.RESOLUTION_LOOP
-            else:
-                self.logger.error("ResolutionLoop: Max retries exceeded → ESCALATE")
-                return AgentPhase.ESCALATE
-        
-        elif resolution_status == ResolutionStatus.USER_STOPPED:
-            # User decided to stop the resolution process
-            self.logger.info("ResolutionLoop: User stopped resolution → COMPLETE")
-            return AgentPhase.COMPLETE
-        
-        else:
-            # Unknown or failed status
-            self.logger.warning(f"ResolutionLoop: Unknown status {resolution_status} → ESCALATE")
-            return AgentPhase.ESCALATE
-    
-    async def _handle_resolution_loop_failure(
-        self,
-        session_state: SessionState,
-        agent_result: Dict[str, Any],
-        **kwargs
-    ) -> AgentPhase:
-        """Handle ResolutionLoop agent failure with escalation or retry."""
+        """Handle InfoValidation agent failure with escalation or retry."""
         error_type = agent_result.get('error_type', 'unknown')
         error_details = agent_result.get('error_details', 'No details provided')
         retry_count = agent_result.get('retry_count', 0)
         
-        self.logger.error(f"ResolutionLoop agent failed: {error_type} - {error_details} (retry {retry_count})")
+        self.logger.error(f"InfoValidation agent failed: {error_type} - {error_details} (retry {retry_count})")
         
-        if retry_count >= self.max_retries[AgentPhase.RESOLUTION_LOOP]:
-            self.logger.error("ResolutionLoop agent max retries exceeded → ESCALATE")
+        if retry_count >= self.max_retries[AgentPhase.INFO_VALIDATION]:
+            self.logger.error("InfoValidation agent max retries exceeded → ESCALATE")
             return AgentPhase.ESCALATE
         
-        # Try again with ResolutionLoop agent
-        return AgentPhase.RESOLUTION_LOOP
+        # Try again with InfoValidation agent
+        return AgentPhase.INFO_VALIDATION
     
     async def _determine_next_after_validation(
         self,

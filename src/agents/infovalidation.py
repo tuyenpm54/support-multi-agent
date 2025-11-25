@@ -1,435 +1,784 @@
 """
-InfoValidation Agent - Unified Information Gathering and Validation
+Info Validation Agent - Information Gathering and Missing Information Collection
 
-This agent combines the functionality of both RequiredInfo and Validation agents
-as specified in the Phase 2 plan.md architecture.
+This agent handles information gathering and validation for general issues that require
+additional context before attempting fixes. It bridges the gap between classification
+and fix execution by ensuring all necessary information is collected.
 
-Responsibilities:
-1. Information gathering through conversational dialogue
-2. Diagnostic question generation and context management  
-3. Validation execution using diagnostic tools
-4. Result analysis and confidence scoring
+Key Responsibilities:
+1. Analyze general issues for missing information requirements
+2. Generate contextual diagnostic questions
+3. Collect structured responses from users
+4. Validate completeness of gathered information
+5. Prepare enriched context for FixAgent
 """
 
 import asyncio
 import logging
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
+from enum import Enum
 
 from src.agents.base import BaseAgent
-from src.models.session import SessionState, RequiredInfoResult, ValidationResult
+from src.models.session import SessionState, InfoValidationResult
+from src.core.information_collector import get_information_collector
+from src.core.hierarchical_semantic_search import get_hierarchical_search_service
+
+
+class InformationStatus(Enum):
+    """Status of information collection for general issues."""
+    PENDING = "pending"
+    COLLECTING = "collecting"
+    COMPLETE = "complete"
+    INSUFFICIENT = "insufficient"
+    FAILED = "failed"
 
 
 class InfoValidationAgent(BaseAgent):
     """
-    Unified agent for information gathering and validation.
+    Agent for information gathering and validation before fix execution.
     
-    Combines the capabilities of RequiredInfo and Validation agents
-    for more efficient workflow in Phase 2 architecture.
+    This agent ensures that general issues have sufficient information
+    before passing them to the FixAgent for resolution.
     """
     
     def __init__(self):
         super().__init__("InfoValidationAgent")
         self.logger = logging.getLogger(__name__)
+        self.semantic_search_service = None
+        self.information_collector = None
         
-        # Configuration thresholds
-        self.max_conversation_turns = 4
-        self.validation_confidence_threshold = 0.8
-        self.information_completeness_threshold = 0.7
+        # Configuration
+        self.max_information_attempts = 3
+        self.question_timeout = 300  # 5 minutes per question
+        self.validation_timeout = 600  # 10 minutes for validation
         
-        # Tool execution configuration
-        self.tool_timeout = 60
-        self.max_parallel_tools = 3
-        
-        # Conversation state tracking
-        self.conversation_state = {
-            'turn_count': 0,
-            'collected_info': {},
-            'asked_questions': set(),
-            'validation_results': [],
-            'confidence_score': 0.0
-        }
+        # Information collection state
+        self.current_issue_id = None
+        self.collected_information = {}
+        self.asked_questions = []
+        self.validation_results = []
     
     async def initialize(self):
-        """Initialize InfoValidation agent dependencies."""
+        """Initialize the info validation agent."""
         try:
-            self.logger.info("InfoValidation agent initialized successfully")
-            # Will be extended with tool registry and database connections
+            self.semantic_search_service = await get_hierarchical_search_service()
+            self.information_collector = get_information_collector()
+            self.logger.info("Info validation agent initialized successfully")
         except Exception as e:
-            self.logger.error(f"Failed to initialize InfoValidation agent: {str(e)}")
+            self.logger.error(f"Failed to initialize info validation agent: {str(e)}")
             raise
     
     async def execute(self, session_state: SessionState, **kwargs) -> Dict[str, Any]:
         """
-        Execute unified information gathering and validation workflow.
+        Execute information gathering and validation for general issues.
         
         Args:
-            session_state: Current session state with classification results
-            **kwargs: Additional parameters (user_input, context, etc.)
+            session_state: Current session state
+            **kwargs: Additional parameters (issue_id, user_input, etc.)
             
         Returns:
-            Unified result with information completeness and validation status
+            Information validation result with enriched context
         """
+        issue_id = kwargs.get('issue_id')
         user_input = kwargs.get('user_input', '')
-        retry_count = kwargs.get('retry_count', 0)
         
-        self.logger.info(f"Executing InfoValidation agent: {user_input[:100]}...")
+        if not issue_id:
+            raise ValueError("issue_id is required for info validation agent")
+        
+        self.logger.info(f"Starting information validation for issue: {issue_id}")
         
         try:
-            # Reset conversation state for new execution
-            if retry_count == 0:
-                self.conversation_state = {
-                    'turn_count': 1,
-                    'collected_info': {},
-                    'asked_questions': set(),
-                    'validation_results': [],
-                    'confidence_score': 0.0
+            # Step 1: Get issue details and analyze information requirements
+            issue_details = await self._get_issue_details(issue_id)
+            
+            # Step 2: Determine what information is missing
+            information_gap = await self._analyze_information_gap(issue_details, session_state)
+            
+            # Step 3: Generate and ask questions to fill gaps
+            if information_gap['has_gaps']:
+                collection_result = await self._collect_missing_information(
+                    issue_details, information_gap, session_state, user_input
+                )
+            else:
+                collection_result = {
+                    "success": True,
+                    "collected_information": {},
+                    "questions_asked": [],
+                    "status": InformationStatus.COMPLETE.value
                 }
             
-            # Step 1: Analyze classification result to understand required information
-            required_info = await self._analyze_information_requirements(session_state)
-            
-            # Step 2: Process user input and extract information
-            extracted_info = await self._extract_information(user_input, required_info)
-            
-            # Step 3: Check information completeness
-            information_complete = await self._assess_information_completeness(
-                required_info, extracted_info
+            # Step 4: Validate information completeness
+            validation_result = await self._validate_information_completeness(
+                issue_details, collection_result, session_state
             )
             
-            # Step 4: If information is complete, perform validation
-            validation_results = []
-            validation_confirmed = False
+            # Step 5: Prepare enriched context for FixAgent
+            enriched_context = await self._prepare_enriched_context(
+                issue_details, collection_result, validation_result, session_state
+            )
             
-            if information_complete:
-                validation_results = await self._perform_validation(
-                    required_info, extracted_info, session_state
-                )
-                validation_confirmed = await self._assess_validation_confidence(
-                    validation_results
-                )
-            
-            # Step 5: Generate next questions if needed
-            next_questions = []
-            if not information_complete or not validation_confirmed:
-                next_questions = await self._generate_next_questions(
-                    required_info, extracted_info, validation_results
-                )
-            
-            # Step 6: Create unified result
-            result = {
-                "success": True,
-                "information_complete": information_complete,
-                "validation_confirmed": validation_confirmed,
-                "collected_information": extracted_info,
-                "validation_results": validation_results,
-                "next_questions": next_questions,
-                "turn_count": self.conversation_state['turn_count'],
-                "confidence_score": self.conversation_state['confidence_score'],
+            return {
+                "success": validation_result['sufficient'],
+                "issue_id": issue_id,
+                "issue_type": issue_details['issue_type'],
+                "information_gap": information_gap,
+                "collection_result": collection_result,
+                "validation_result": validation_result,
+                "enriched_context": enriched_context,
                 "processing_time": datetime.now().isoformat()
             }
             
-            self.logger.info(f"InfoValidation completed: Info={information_complete}, "
-                           f"Validation={validation_confirmed}, "
-                           f"Turn={self.conversation_state['turn_count']}")
-            
-            return result
-            
         except Exception as e:
-            self.logger.error(f"InfoValidation execution failed: {str(e)}")
+            self.logger.error(f"Info validation failed: {str(e)}")
             return await self.handle_error(e, session_state)
     
-    async def _analyze_information_requirements(self, session_state: SessionState) -> Dict[str, Any]:
-        """Analyze classification result to determine required information."""
-        classification = session_state.classification
-        
-        if not classification:
-            return {"required_fields": ["issue_description"], "priority": "high"}
-        
-        # Extract required information based on classification
-        requirements = {
-            "required_fields": [],
-            "optional_fields": [],
-            "priority": "medium",
-            "diagnostic_tools": classification.recommended_tools or []
-        }
-        
-        # Category-specific requirements
-        if "formula" in classification.suggested_category.lower():
-            requirements["required_fields"].extend([
-                "dish_name", "warehouse", "period", "formula_details"
-            ])
-        elif "data_sync" in classification.suggested_category.lower():
-            requirements["required_fields"].extend([
-                "warehouse", "sync_direction", "error_messages", "connection_status"
-            ])
-        elif "performance" in classification.suggested_category.lower():
-            requirements["required_fields"].extend([
-                "slow_operations", "timing_details", "browser_info", "data_size"
-            ])
-        
-        # Add diagnostic questions from classification
-        if classification.diagnostic_questions:
-            requirements["diagnostic_questions"] = classification.diagnostic_questions
-        
-        self.logger.info(f"Analyzed information requirements: {len(requirements['required_fields'])} fields")
-        return requirements
-    
-    async def _extract_information(self, user_input: str, requirements: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract structured information from user input."""
-        extracted = {}
-        
-        # Simple extraction logic - will be enhanced with NLP
-        if "kho" in user_input.lower():
-            parts = user_input.lower().split("kho")
-            if len(parts) > 1:
-                extracted["warehouse"] = parts[1].strip().split()[0]
-        
-        # Extract period information
-        import re
-        period_patterns = [
-            r"tháng\s+(\d{1,2})[/]?(\d{4})?",
-            r"ky\s+(\d{1,2})[/]?(\d{4})?",
-            r"(\d{1,2})[/](\d{4})"
-        ]
-        
-        for pattern in period_patterns:
-            match = re.search(pattern, user_input.lower())
-            if match:
-                month = match.group(1)
-                year = match.group(2) if match.group(2) else "2024"
-                extracted["period"] = f"{month}/{year}"
-                break
-        
-        # Extract dish names
-        dish_patterns = [
-            r"món\s+([^\s,\.]+(?:\s+[^\s,\.]+)*)",
-            r"([^,\s]+(?:\s+[^,\s]+)*)\s*(?:bị|gặp|mất)"
-        ]
-        
-        for pattern in dish_patterns:
-            match = re.search(pattern, user_input.lower())
-            if match and len(match.group(1)) > 2:
-                extracted["dish_name"] = match.group(1).strip()
-                break
-        
-        # Store full user input as context
-        extracted["user_input"] = user_input
-        extracted["timestamp"] = datetime.now().isoformat()
-        
-        # Update conversation state
-        self.conversation_state['collected_info'].update(extracted)
-        
-        self.logger.info(f"Extracted {len(extracted)} pieces of information")
-        return extracted
-    
-    async def _assess_information_completeness(self, requirements: Dict[str, Any], 
-                                             extracted_info: Dict[str, Any]) -> bool:
-        """Assess if required information is complete."""
-        required_fields = requirements.get("required_fields", [])
-        
-        if not required_fields:
-            return True  # No specific requirements
-        
-        completed_fields = 0
-        for field in required_fields:
-            if field in extracted_info and extracted_info[field]:
-                completed_fields += 1
-        
-        completeness_ratio = completed_fields / len(required_fields)
-        is_complete = completeness_ratio >= self.information_completeness_threshold
-        
-        # Update conversation state confidence
-        self.conversation_state['confidence_score'] = completeness_ratio
-        
-        self.logger.info(f"Information completeness: {completeness_ratio:.2f} ({is_complete})")
-        return is_complete
-    
-    async def _perform_validation(self, requirements: Dict[str, Any], 
-                                extracted_info: Dict[str, Any], 
-                                session_state: SessionState) -> List[Dict[str, Any]]:
-        """Perform validation using diagnostic tools."""
-        validation_results = []
-        
-        # Placeholder for actual tool execution
-        # In Phase 2 implementation, this will use the Tool Management system
-        
-        # Simulate tool execution based on category
-        tools = requirements.get("diagnostic_tools", [])
-        
-        for tool in tools[:self.max_parallel_tools]:  # Limit parallel tools
-            try:
-                result = await self._execute_diagnostic_tool(tool, extracted_info)
-                validation_results.append(result)
+    async def _get_issue_details(self, issue_id: str) -> Dict[str, Any]:
+        """Get detailed information about an issue including information requirements."""
+        try:
+            async with self.semantic_search_service._connection_pool.acquire() as conn:
+                # Get issue details
+                issue = await conn.fetchrow("""
+                    SELECT i.*, 
+                           COALESCE(child_count.child_count, 0) as child_count,
+                           COALESCE(parent_info.parent_title, NULL) as parent_title
+                    FROM issues i
+                    LEFT JOIN (
+                        SELECT parent_issue_id, COUNT(*) as child_count
+                        FROM issues
+                        WHERE parent_issue_id IS NOT NULL
+                        GROUP BY parent_issue_id
+                    ) child_count ON i.issue_id = child_count.parent_issue_id
+                    LEFT JOIN (
+                        SELECT issue_id, title as parent_title
+                        FROM issues
+                    ) parent_info ON i.parent_issue_id = parent_info.issue_id
+                    WHERE i.issue_id = $1
+                """, issue_id)
                 
-            except Exception as e:
-                self.logger.error(f"Diagnostic tool {tool} failed: {str(e)}")
-                validation_results.append({
-                    "tool": tool,
-                    "status": "failed",
-                    "error": str(e)
-                })
-        
-        # Store results in conversation state
-        self.conversation_state['validation_results'] = validation_results
-        
-        self.logger.info(f"Executed {len(validation_results)} validation tools")
-        return validation_results
+                if not issue:
+                    raise ValueError(f"Issue not found: {issue_id}")
+                
+                issue_details = dict(issue)
+                
+                # Get information requirements for general issues
+                if issue_details['issue_type'] == 'general':
+                    # For now, use basic requirements - in production, this would query a schema
+                    issue_details['information_requirements'] = [
+                        {
+                            "information_category": "symptoms",
+                            "required": True,
+                            "description": "Specific symptoms and error messages",
+                            "example_questions": [
+                                "What specific error messages are you seeing?",
+                                "When did this issue start occurring?",
+                                "How frequently does this issue happen?"
+                            ]
+                        },
+                        {
+                            "information_category": "environment",
+                            "required": False,
+                            "description": "Environment and system details",
+                            "example_questions": [
+                                "What environment are you working in (production/staging)?",
+                                "What browser or system are you using?"
+                            ]
+                        },
+                        {
+                            "information_category": "impact",
+                            "required": True,
+                            "description": "Business impact and affected users",
+                            "example_questions": [
+                                "How many users are affected by this issue?",
+                                "What business processes are impacted?"
+                            ]
+                        }
+                    ]
+                else:
+                    issue_details['information_requirements'] = []
+                
+                # Get detailed children for general issues
+                if issue_details['issue_type'] == 'general' and issue_details['child_count'] > 0:
+                    children = await conn.fetch("""
+                        SELECT * FROM get_child_issues_ordered($1)
+                        ORDER BY order_index
+                    """, issue_id)
+                    
+                    issue_details['detailed_issues'] = [dict(child) for child in children]
+                else:
+                    issue_details['detailed_issues'] = []
+                
+                return issue_details
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get issue details: {str(e)}")
+            raise
     
-    async def _execute_diagnostic_tool(self, tool_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a single diagnostic tool."""
-        # Placeholder implementation
-        # In actual Phase 2, this will use the Tool Management & Infrastructure
-        
-        await asyncio.sleep(0.1)  # Simulate tool execution time
-        
-        # Simulate different tool results
-        if tool_name == "check_formula":
+    async def _analyze_information_gap(
+        self, issue_details: Dict[str, Any], session_state: SessionState
+    ) -> Dict[str, Any]:
+        """Analyze what information is missing for the issue."""
+        try:
+            self.logger.info("Analyzing information gap for general issue")
+            
+            missing_categories = []
+            available_information = {}
+            
+            # Get information requirements
+            info_requirements = issue_details.get('information_requirements', [])
+            
+            # Check each required information category
+            for requirement in info_requirements:
+                category = requirement['information_category']
+                is_required = requirement['required']
+                description = requirement['description']
+                
+                # Check if we have information for this category
+                category_info = await self._extract_category_information(
+                    category, issue_details, session_state
+                )
+                
+                if category_info:
+                    available_information[category] = {
+                        "data": category_info,
+                        "source": "existing",
+                        "confidence": 0.8
+                    }
+                elif is_required:
+                    missing_categories.append({
+                        "category": category,
+                        "description": description,
+                        "priority": "high",
+                        "example_questions": requirement.get('example_questions', [])
+                    })
+                else:
+                    missing_categories.append({
+                        "category": category,
+                        "description": description,
+                        "priority": "medium",
+                        "example_questions": requirement.get('example_questions', [])
+                    })
+            
+            has_gaps = len(missing_categories) > 0
+            
             return {
-                "tool": tool_name,
-                "status": "success",
-                "result": "Formula structure appears valid",
-                "confidence": 0.8,
-                "issues_found": []
+                "has_gaps": has_gaps,
+                "missing_categories": missing_categories,
+                "available_information": available_information,
+                "completeness_score": len(available_information) / (len(info_requirements) or 1)
             }
-        elif tool_name == "query_database":
+            
+        except Exception as e:
+            self.logger.error(f"Failed to analyze information gap: {str(e)}")
             return {
-                "tool": tool_name,
-                "status": "success", 
-                "result": "Database query completed",
-                "confidence": 0.9,
-                "data_found": True
+                "has_gaps": True,
+                "missing_categories": [],
+                "available_information": {},
+                "completeness_score": 0.0,
+                "error": str(e)
             }
-        else:
+    
+    async def _collect_missing_information(
+        self,
+        issue_details: Dict[str, Any],
+        information_gap: Dict[str, Any],
+        session_state: SessionState,
+        user_input: str
+    ) -> Dict[str, Any]:
+        """Collect missing information through user questions."""
+        try:
+            self.logger.info("Collecting missing information from user")
+            
+            missing_categories = information_gap['missing_categories']
+            collected_information = {}
+            questions_asked = []
+            
+            # Sort by priority
+            high_priority = [cat for cat in missing_categories if cat['priority'] == 'high']
+            medium_priority = [cat for cat in missing_categories if cat['priority'] == 'medium']
+            
+            # Process high priority categories first
+            for category in high_priority + medium_priority:
+                category_name = category['category']
+                
+                try:
+                    # Generate questions for this category
+                    questions = await self._generate_category_questions(
+                        category, issue_details, session_state
+                    )
+                    
+                    category_responses = {}
+                    
+                    for question in questions:
+                        question_text = question['question']
+                        question_key = question['key']
+                        
+                        # Ask the question
+                        response = await self._ask_question(
+                            question_text, session_state, question_key
+                        )
+                        
+                        category_responses[question_key] = response
+                        questions_asked.append({
+                            "category": category_name,
+                            "question": question_text,
+                            "response": response,
+                            "timestamp": datetime.now().isoformat()
+                        })
+                    
+                    # Process responses for this category
+                    processed_info = await self._process_category_responses(
+                        category_name, category_responses, question
+                    )
+                    
+                    if processed_info:
+                        collected_information[category_name] = {
+                            "data": processed_info,
+                            "source": "user_response",
+                            "confidence": 0.9,
+                            "responses": category_responses
+                        }
+                    
+                except Exception as e:
+                    self.logger.error(f"Failed to collect information for category {category_name}: {str(e)}")
+                    continue
+            
+            success = len(collected_information) > 0
+            
             return {
-                "tool": tool_name,
-                "status": "success",
-                "result": f"{tool_name} executed successfully",
-                "confidence": 0.7
+                "success": success,
+                "collected_information": collected_information,
+                "questions_asked": questions_asked,
+                "status": InformationStatus.COMPLETE.value if success else InformationStatus.INSUFFICIENT.value
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to collect missing information: {str(e)}")
+            return {
+                "success": False,
+                "collected_information": {},
+                "questions_asked": [],
+                "status": InformationStatus.FAILED.value,
+                "error": str(e)
             }
     
-    async def _assess_validation_confidence(self, validation_results: List[Dict[str, Any]]) -> bool:
-        """Assess overall validation confidence."""
-        if not validation_results:
-            return False
-        
-        # Calculate average confidence from successful validations
-        successful_results = [r for r in validation_results if r.get("status") == "success"]
-        
-        if not successful_results:
-            return False
-        
-        avg_confidence = sum(r.get("confidence", 0) for r in successful_results) / len(successful_results)
-        
-        # Check for critical issues
-        critical_issues = []
-        for result in validation_results:
-            if result.get("status") == "failed" or result.get("error"):
-                critical_issues.append(result.get("tool", "unknown"))
-        
-        # Validation is confirmed if confidence is high and no critical issues
-        validation_confirmed = (
-            avg_confidence >= self.validation_confidence_threshold and
-            len(critical_issues) == 0
-        )
-        
-        # Update conversation state
-        self.conversation_state['confidence_score'] = max(
-            self.conversation_state['confidence_score'],
-            avg_confidence
-        )
-        
-        self.logger.info(f"Validation confidence: {avg_confidence:.2f} ({validation_confirmed})")
-        return validation_confirmed
+    async def _validate_information_completeness(
+        self,
+        issue_details: Dict[str, Any],
+        collection_result: Dict[str, Any],
+        session_state: SessionState
+    ) -> Dict[str, Any]:
+        """Validate if collected information is sufficient for fix execution."""
+        try:
+            self.logger.info("Validating information completeness")
+            
+            # Combine existing and newly collected information
+            available_info = collection_result.get('collected_information', {})
+            
+            # Check if we have sufficient information for each required category
+            info_requirements = issue_details.get('information_requirements', [])
+            
+            completeness_scores = {}
+            total_score = 0
+            max_score = 0
+            
+            for requirement in info_requirements:
+                category = requirement['information_category']
+                is_required = requirement['required']
+                
+                max_score += 1.0 if is_required else 0.5
+                
+                if category in available_info:
+                    # Calculate completeness score for this category
+                    category_score = await self._calculate_category_completeness(
+                        category, available_info[category], requirement
+                    )
+                    completeness_scores[category] = category_score
+                    total_score += category_score
+                elif is_required:
+                    completeness_scores[category] = 0.0
+                else:
+                    completeness_scores[category] = 0.5  # Partial credit for optional
+            
+            overall_score = total_score / max_score if max_score > 0 else 0.0
+            sufficient = overall_score >= 0.7  # 70% completeness threshold
+            
+            return {
+                "sufficient": sufficient,
+                "overall_score": overall_score,
+                "completeness_scores": completeness_scores,
+                "missing_critical": [
+                    cat for cat, score in completeness_scores.items()
+                    if score < 0.5 and any(req['information_category'] == cat and req['required'] 
+                                          for req in info_requirements)
+                ],
+                "recommendation": "Proceed to fix" if sufficient else "Collect more information"
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to validate information completeness: {str(e)}")
+            return {
+                "sufficient": False,
+                "overall_score": 0.0,
+                "completeness_scores": {},
+                "missing_critical": [],
+                "recommendation": "Retry validation",
+                "error": str(e)
+            }
     
-    async def _generate_next_questions(self, requirements: Dict[str, Any], 
-                                     extracted_info: Dict[str, Any],
-                                     validation_results: List[Dict[str, Any]]) -> List[str]:
-        """Generate next questions for information gathering or clarification."""
-        questions = []
-        
-        # Check missing required information
-        required_fields = requirements.get("required_fields", [])
-        for field in required_fields:
-            if field not in extracted_info or not extracted_info[field]:
-                question = self._generate_field_question(field, extracted_info)
-                if question and question not in self.conversation_state['asked_questions']:
-                    questions.append(question)
-                    self.conversation_state['asked_questions'].add(question)
-        
-        # Add diagnostic questions from requirements
-        diagnostic_questions = requirements.get("diagnostic_questions", [])
-        for question in diagnostic_questions:
-            if question not in self.conversation_state['asked_questions']:
-                questions.append(question)
-                self.conversation_state['asked_questions'].add(question)
-        
-        # Add clarification questions based on validation failures
-        for result in validation_results:
-            if result.get("status") == "failed":
-                tool = result.get("tool", "diagnostic tool")
-                questions.append(f"Could you provide more details about the {tool.replace('_', ' ')} issue?")
-        
-        # Add general follow-up questions if needed
-        if len(questions) < 2 and self.conversation_state['turn_count'] < self.max_conversation_turns:
-            questions.extend([
-                "Bạn có thể cung cấp thêm chi tiết về vấn đề không?",
-                "Điều gì đã xảy ra ngay trước khi vấn đề này xuất hiện?"
-            ])
-        
-        # Increment turn counter
-        self.conversation_state['turn_count'] += 1
-        
-        self.logger.info(f"Generated {len(questions)} next questions")
-        return questions[:3]  # Return top 3 questions
+    async def _prepare_enriched_context(
+        self,
+        issue_details: Dict[str, Any],
+        collection_result: Dict[str, Any],
+        validation_result: Dict[str, Any],
+        session_state: SessionState
+    ) -> Dict[str, Any]:
+        """Prepare enriched context for FixAgent."""
+        try:
+            self.logger.info("Preparing enriched context for FixAgent")
+            
+            # Combine all information sources
+            enriched_context = {
+                "issue_details": issue_details,
+                "collected_information": collection_result.get('collected_information', {}),
+                "information_completeness": validation_result,
+                "session_context": {
+                    "user_id": session_state.user_id,
+                    "conversation_history": session_state.conversation_history[-5:],  # Last 5 messages
+                    "classification_result": session_state.classification.dict() if session_state.classification else None
+                },
+                "metadata": {
+                    "prepared_at": datetime.now().isoformat(),
+                    "validation_score": validation_result.get('overall_score', 0.0),
+                    "questions_asked": len(collection_result.get('questions_asked', [])),
+                    "information_categories": list(collection_result.get('collected_information', {}).keys())
+                }
+            }
+            
+            # Add tool recommendations based on collected information
+            tool_recommendations = await self._generate_tool_recommendations(
+                issue_details, enriched_context
+            )
+            
+            enriched_context["tool_recommendations"] = tool_recommendations
+            
+            return enriched_context
+            
+        except Exception as e:
+            self.logger.error(f"Failed to prepare enriched context: {str(e)}")
+            return {
+                "issue_details": issue_details,
+                "error": str(e),
+                "prepared_at": datetime.now().isoformat()
+            }
     
-    def _generate_field_question(self, field: str, extracted_info: Dict[str, Any]) -> Optional[str]:
-        """Generate a question for a specific missing field."""
-        question_mapping = {
-            "dish_name": "Vấn đề này xảy ra với món ăn nào?",
-            "warehouse": "Vấn đề này xảy ra ở kho nào?",
-            "period": "Đây là kỳ báo cáo nào (tháng/năm)?",
-            "formula_details": "Bạn có thể cung cấp chi tiết về công thức không?",
-            "error_messages": "Bạn có thấy thông báo lỗi cụ thể nào không?",
-            "connection_status": "Kết nối mạng/internet có ổn định không?",
-            "slow_operations": "Chức năng nào đang chạy chậm?",
-            "timing_details": "Vấn đề này xảy ra vào thời gian nào?",
-            "browser_info": "Bạn đang dùng trình duyệt nào?"
-        }
+    # Helper methods for information collection and validation
+    
+    async def _extract_category_information(
+        self, category: str, issue_details: Dict[str, Any], session_state: SessionState
+    ) -> Optional[Dict[str, Any]]:
+        """Extract existing information for a specific category."""
+        try:
+            # Check issue details
+            if category == 'symptoms':
+                return issue_details.get('symptoms') or issue_details.get('description')
+            
+            elif category == 'environment':
+                return {
+                    'system_info': issue_details.get('system_info'),
+                    'category': issue_details.get('category'),
+                    'severity': issue_details.get('severity')
+                }
+            
+            elif category == 'user_context':
+                return session_state.user_metadata
+            
+            elif category == 'timeline':
+                # Extract timeline from conversation history
+                recent_events = session_state.conversation_history[-3:]
+                return {
+                    'recent_messages': recent_events,
+                    'session_duration': (datetime.now() - session_state.created_at).total_seconds()
+                }
+            
+            # Add more category-specific extraction logic as needed
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Failed to extract {category} information: {str(e)}")
+            return None
+    
+    async def _generate_category_questions(
+        self, category: Dict[str, Any], issue_details: Dict[str, Any], session_state: SessionState
+    ) -> List[Dict[str, Any]]:
+        """Generate questions for a specific information category."""
+        try:
+            category_name = category['category']
+            example_questions = category.get('example_questions', [])
+            
+            questions = []
+            
+            if example_questions:
+                # Use provided example questions
+                for i, question_text in enumerate(example_questions):
+                    questions.append({
+                        "key": f"{category_name}_{i}",
+                        "question": question_text,
+                        "type": "open_ended",
+                        "required": True
+                    })
+            else:
+                # Generate default questions based on category
+                if category_name == 'symptoms':
+                    questions.append({
+                        "key": "symptoms_description",
+                        "question": f"Can you describe the specific symptoms you're experiencing with '{issue_details['title']}'?",
+                        "type": "open_ended",
+                        "required": True
+                    })
+                
+                elif category_name == 'environment':
+                    questions.append({
+                        "key": "environment_details",
+                        "question": "What environment or system details should we know about to resolve this issue?",
+                        "type": "open_ended",
+                        "required": False
+                    })
+                
+                elif category_name == 'reproduction_steps':
+                    questions.append({
+                        "key": "reproduction_steps",
+                        "question": "What steps can reproduce this issue? Please provide as much detail as possible.",
+                        "type": "open_ended",
+                        "required": True
+                    })
+                
+                else:
+                    # Generic question
+                    questions.append({
+                        "key": f"{category_name}_info",
+                        "question": f"Can you provide more information about {category['description']}?",
+                        "type": "open_ended",
+                        "required": category.get('priority') == 'high'
+                    })
+            
+            return questions
+            
+        except Exception as e:
+            self.logger.error(f"Failed to generate questions for {category['category']}: {str(e)}")
+            return []
+    
+    async def _ask_question(
+        self, question_text: str, session_state: SessionState, question_key: str
+    ) -> str:
+        """Ask a question and get user response."""
+        try:
+            # In production, this would integrate with the chat interface
+            # For now, simulate user responses for testing
+            
+            self.logger.info(f"Asking question: {question_text}")
+            
+            # Simulate user response based on question type
+            if "symptoms" in question_key:
+                return "The system is running slowly and users are experiencing timeouts when trying to access the dashboard."
+            elif "environment" in question_key:
+                return "Production environment on AWS, using PostgreSQL database, Redis cache, and FastAPI backend."
+            elif "reproduction" in question_key:
+                return "1. Login to system 2. Navigate to dashboard 3. Wait for page to load 4. Observe timeout error."
+            elif "error" in question_key:
+                return "Error message: 'Connection timeout after 30 seconds'"
+            elif "impact" in question_key:
+                return "Around 50 users affected, mainly sales team cannot generate reports"
+            else:
+                return f"Response to: {question_text} - This is a simulated user response for testing."
+            
+        except Exception as e:
+            self.logger.error(f"Failed to ask question {question_key}: {str(e)}")
+            return ""
+    
+    async def _process_category_responses(
+        self, category_name: str, responses: Dict[str, str], question_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Process responses for a specific information category."""
+        try:
+            if not responses:
+                return {}
+            
+            # Combine and structure the responses
+            processed_data = {
+                "category": category_name,
+                "responses": responses,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Category-specific processing
+            if category_name == 'symptoms':
+                # Extract structured symptom information
+                all_text = " ".join(responses.values())
+                processed_data["structured_symptoms"] = {
+                    "description": all_text,
+                    "keywords": self._extract_keywords(all_text),
+                    "severity_indicators": self._extract_severity_indicators(all_text)
+                }
+            
+            elif category_name == 'environment':
+                # Parse environment details
+                all_text = " ".join(responses.values())
+                processed_data["structured_environment"] = {
+                    "description": all_text,
+                    "technologies": self._extract_technologies(all_text),
+                    "infrastructure": self._extract_infrastructure(all_text)
+                }
+            
+            elif category_name == 'reproduction_steps':
+                # Parse reproduction steps
+                all_text = " ".join(responses.values())
+                steps = self._parse_reproduction_steps(all_text)
+                processed_data["structured_steps"] = steps
+            
+            return processed_data
+            
+        except Exception as e:
+            self.logger.error(f"Failed to process category responses for {category_name}: {str(e)}")
+            return {"category": category_name, "responses": responses, "error": str(e)}
+    
+    async def _calculate_category_completeness(
+        self, category: str, category_info: Dict[str, Any], requirement: Dict[str, Any]
+    ) -> float:
+        """Calculate completeness score for a specific information category."""
+        try:
+            data = category_info.get('data', {})
+            
+            if not data:
+                return 0.0
+            
+            # Base score based on having data
+            base_score = 0.5
+            
+            # Additional score based on data quality
+            if isinstance(data, dict) and data.get('structured_symptoms'):
+                base_score += 0.3  # Has structured data
+            
+            if len(str(data)) > 50:  # Has sufficient detail
+                base_score += 0.2
+            
+            return min(1.0, base_score)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to calculate completeness for {category}: {str(e)}")
+            return 0.0
+    
+    async def _generate_tool_recommendations(
+        self, issue_details: Dict[str, Any], enriched_context: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Generate tool recommendations based on collected information."""
+        try:
+            recommendations = []
+            
+            category = issue_details.get('category', 'general')
+            collected_info = enriched_context.get('collected_information', {})
+            
+            # Base recommendations on category
+            if category == 'performance':
+                recommendations.extend([
+                    {"tool": "system_monitor", "confidence": 0.8, "reason": "Performance issues detected"},
+                    {"tool": "log_analyzer", "confidence": 0.7, "reason": "Need to analyze performance logs"}
+                ])
+            
+            elif category == 'authentication':
+                recommendations.extend([
+                    {"tool": "user_validator", "confidence": 0.9, "reason": "Authentication related issue"},
+                    {"tool": "session_checker", "confidence": 0.8, "reason": "Check session validity"}
+                ])
+            
+            elif category == 'database':
+                recommendations.extend([
+                    {"tool": "db_connection_test", "confidence": 0.9, "reason": "Database connectivity issue"},
+                    {"tool": "query_analyzer", "confidence": 0.7, "reason": "Analyze query performance"}
+                ])
+            
+            # Add recommendations based on collected information
+            if 'environment' in collected_info:
+                env_info = collected_info['environment'].get('data', {})
+                if 'AWS' in str(env_info):
+                    recommendations.append({"tool": "aws_health_check", "confidence": 0.7, "reason": "AWS environment detected"})
+            
+            if 'symptoms' in collected_info:
+                symptom_info = collected_info['symptoms'].get('data', {})
+                if 'timeout' in str(symptom_info).lower():
+                    recommendations.append({"tool": "timeout_analyzer", "confidence": 0.8, "reason": "Timeout symptoms detected"})
+            
+            return recommendations[:5]  # Limit to top 5 recommendations
+            
+        except Exception as e:
+            self.logger.error(f"Failed to generate tool recommendations: {str(e)}")
+            return []
+    
+    # Utility methods for text processing
+    
+    def _extract_keywords(self, text: str) -> List[str]:
+        """Extract keywords from text."""
+        # Simple keyword extraction - in production, use NLP
+        import re
+        words = re.findall(r'\b\w+\b', text.lower())
+        # Filter out common words and return important ones
+        stop_words = {'the', 'is', 'at', 'which', 'on', 'a', 'an', 'and', 'or', 'but', 'in', 'with', 'to', 'for', 'of', 'as', 'by', 'it', 'this', 'that', 'are', 'be', 'have', 'has', 'had', 'was', 'were', 'will', 'would', 'could', 'should'}
+        return [word for word in words if len(word) > 3 and word not in stop_words][:10]
+    
+    def _extract_severity_indicators(self, text: str) -> List[str]:
+        """Extract severity indicators from text."""
+        severity_keywords = ['critical', 'urgent', 'severe', 'major', 'blocker', 'timeout', 'crash', 'error', 'failed']
+        return [word for word in severity_keywords if word in text.lower()]
+    
+    def _extract_technologies(self, text: str) -> List[str]:
+        """Extract technology mentions from text."""
+        tech_keywords = ['aws', 'azure', 'gcp', 'postgresql', 'mysql', 'redis', 'mongodb', 'docker', 'kubernetes', 'fastapi', 'django', 'flask', 'react', 'vue', 'angular']
+        return [tech for tech in tech_keywords if tech in text.lower()]
+    
+    def _extract_infrastructure(self, text: str) -> List[str]:
+        """Extract infrastructure mentions from text."""
+        infra_keywords = ['production', 'staging', 'development', 'server', 'database', 'cache', 'load balancer', 'cdn', 'api gateway']
+        return [infra for infra in infra_keywords if infra in text.lower()]
+    
+    def _parse_reproduction_steps(self, text: str) -> List[str]:
+        """Parse reproduction steps from text."""
+        # Simple parsing - look for numbered steps or step indicators
+        import re
         
-        return question_mapping.get(field)
+        # Try to extract numbered steps
+        numbered_steps = re.findall(r'\d+\.\s*([^.!?]+[.!?]?)', text)
+        if numbered_steps:
+            return numbered_steps[:5]  # Limit to first 5 steps
+        
+        # Try to extract step indicators
+        step_indicators = re.findall(r'(?:step|first|then|next|finally)\s*[:.]?\s*([^.!?]+[.!?]?)', text, re.IGNORECASE)
+        if step_indicators:
+            return step_indicators[:5]
+        
+        # Return as single step if no clear structure
+        return [text] if text.strip() else []
     
     async def validate_input(self, session_state: SessionState, **kwargs) -> bool:
-        """Validate input for InfoValidation agent."""
-        # InfoValidation can work with minimal input, but requires classification
-        return session_state.classification is not None
+        """Validate input for info validation agent."""
+        return kwargs.get('issue_id') is not None
     
     async def handle_error(self, error: Exception, session_state: SessionState) -> Dict[str, Any]:
-        """Handle InfoValidation errors with graceful degradation."""
-        self.logger.error(f"InfoValidation error: {str(error)}")
+        """Handle info validation agent errors with fallback behavior."""
+        self.logger.error(f"Info validation agent error: {str(error)}")
         
         return {
             "success": False,
             "error": str(error),
-            "error_type": "infovalidation_error",
-            "information_complete": False,
-            "validation_confirmed": False,
-            "collected_information": self.conversation_state.get('collected_info', {}),
-            "validation_results": [],
-            "next_questions": [
-                "Xin lỗi, tôi gặp sự cố khi xử lý. Bạn có thể thử lại không?",
-                "Bạn có thể mô tả lại vấn đề một cách khác không?"
-            ],
-            "turn_count": self.conversation_state.get('turn_count', 0),
-            "retry_count": 0,
-            "processing_time": datetime.now().isoformat()
+            "error_type": "info_validation_error",
+            "processing_time": datetime.now().isoformat(),
+            "fallback_message": "I encountered an error while gathering information. Would you like to try a different approach?"
         }
 
 
-# Global InfoValidation agent instance
-infovalidation_agent = InfoValidationAgent()
+# Global info validation agent instance
+info_validation_agent = InfoValidationAgent()
 
 
-async def get_infovalidation_agent() -> InfoValidationAgent:
-    """Get the global InfoValidation agent instance."""
-    return infovalidation_agent
+async def get_info_validation_agent() -> InfoValidationAgent:
+    """Get the global info validation agent instance."""
+    return info_validation_agent

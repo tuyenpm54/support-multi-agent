@@ -8,7 +8,10 @@ from typing import Dict, Any
 from src.core.config import settings
 from src.core.state_manager import SessionManager, session_manager
 from src.agents.orchestrator import OrchestratorAgent
-from src.models.session import SessionState
+from src.agents.classifier import get_classifier_agent
+from src.agents.infovalidation import get_info_validation_agent
+from src.agents.fix_agent import get_fix_agent
+from src.models.session import SessionState, AgentPhase
 from src.api.routers import sessions, chat, agents
 
 
@@ -36,6 +39,29 @@ async def lifespan(app: FastAPI):
     
     # Set up dependencies
     orchestrator.set_dependencies(session_manager, None)  # Tool registry to be added later
+    
+    # Register agents for new 3-agent workflow
+    try:
+        # Register Classifier agent
+        classifier_agent = await get_classifier_agent()
+        orchestrator.register_agent(AgentPhase.CLASSIFY, classifier_agent)
+        logger.info("Registered Classifier agent")
+        
+        # Register InfoValidation agent
+        infovalidation_agent = await get_info_validation_agent()
+        orchestrator.register_agent(AgentPhase.INFO_VALIDATION, infovalidation_agent)
+        logger.info("Registered InfoValidation agent")
+        
+        # Register Fix agent
+        fix_agent = await get_fix_agent()
+        orchestrator.register_agent(AgentPhase.FIX, fix_agent)
+        logger.info("Registered Fix agent")
+        
+        logger.info("All agents registered successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to register agents: {str(e)}")
+        raise
     
     # Set orchestrator instance for unified chat router
     chat.set_orchestrator_instance(orchestrator)
